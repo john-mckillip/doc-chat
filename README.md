@@ -344,7 +344,7 @@ Completion signal:
 ```
 doc-chat/
 ├── backend/
-│   ├── app.py                 # FastAPI application & WebSocket
+│   ├── app.py                # FastAPI application & WebSocket
 │   ├── indexer.py            # Document ingestion & chunking
 │   ├── retriever.py          # Vector search & Claude integration
 │   ├── requirements.txt
