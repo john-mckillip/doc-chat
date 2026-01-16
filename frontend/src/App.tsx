@@ -1,35 +1,51 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useState, useEffect } from 'react';
+import { Chat } from './components/Chat';
+import { IndexStatus } from './components/IndexStatus';
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [isIndexed, setIsIndexed] = useState(false);
+  const [stats, setStats] = useState<{ total_chunks: number } | null>(null);
+
+  useEffect(() => {
+    fetchStats();
+  }, []);
+
+  const fetchStats = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/stats');
+      const data = await response.json();
+      setStats(data);
+      setIsIndexed(data.total_chunks > 0);
+    } catch (error) {
+      console.error('Failed to fetch stats:', error);
+    }
+  };
+
+  const handleIndex = async (directory: string) => {
+    try {
+      const response = await fetch('http://localhost:8000/api/index', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory })
+      });
+      
+      if (response.ok) {
+        await fetchStats();
+      }
+    } catch (error) {
+      console.error('Failed to index:', error);
+    }
+  };
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    <div className="h-screen flex flex-col">
+      {!isIndexed ? (
+        <IndexStatus onIndex={handleIndex} stats={stats} />
+      ) : (
+        <Chat />
+      )}
+    </div>
+  );
 }
 
-export default App
+export default App;
