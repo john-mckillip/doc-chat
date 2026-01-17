@@ -16,8 +16,9 @@ build/
 .env
 .env.local
 
-# ChromaDB data
+# Database data
 backend/data/chroma_db/
+backend/data/faiss_db/
 
 # Node modules
 node_modules/
