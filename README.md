@@ -8,7 +8,8 @@ A local development tool that lets you chat with your project documentation usin
 - 💬 **Real-time Streaming** - See responses as they're generated via WebSocket
 - 📚 **Source Citations** - Know exactly which files informed each answer
 - 🧠 **Conversation Memory** - Follow-up questions maintain context
-- ⚡ **Smart Indexing** - Only re-indexes changed files for efficiency
+- ⚡ **Smart Incremental Indexing** - MD5 hash tracking only re-indexes new/changed files
+- 🔄 **WebSocket Indexing** - Real-time progress updates, no timeout issues on cloud platforms
 - 🎨 **Clean UI** - Modern React interface with Tailwind CSS 4
 
 ## Architecture
@@ -34,23 +35,33 @@ A local development tool that lets you chat with your project documentation usin
 
 ### How It Works
 
-1. **Indexing Phase**
-   - Crawls your project directory for documentation files
+1. **Indexing Phase** (via WebSocket)
+   - User provides documentation directory path
+   - Backend crawls directory for supported file types
+   - Calculates MD5 hash for each file to detect changes
+   - **Smart incremental indexing:**
+     - New files: fully indexed
+     - Modified files: old chunks marked deleted, re-indexed
+     - Unchanged files: skipped entirely
+     - Deleted files: chunks marked as deleted
    - Splits documents into ~1000 token chunks with overlap
    - Generates vector embeddings for semantic search
-   - Stores in FAISS with metadata (file path, hash, etc.)
+   - Stores in FAISS with metadata (file path, hash, deleted flag, etc.)
+   - Real-time progress updates sent via WebSocket
 
-2. **Query Phase**
+2. **Query Phase** (via WebSocket)
    - User asks a question via the web UI
    - Query is converted to a vector embedding
-   - FAISS finds the 5 most semantically similar chunks
+   - FAISS finds the 5 most semantically similar chunks (excluding deleted)
    - Chunks are sent as context to Claude API
    - Response streams back in real-time via WebSocket
 
 3. **Smart Updates**
-   - File hashes detect changes
-   - Only modified files are re-indexed
-   - Unchanged files skip processing
+   - File hashes stored in `file_hashes.pkl`
+   - MD5 hash comparison detects file changes
+   - Only new and modified files are re-indexed
+   - Unchanged files skip processing entirely
+   - Deleted chunks are soft-deleted (marked, not removed)
 
 ## Prerequisites
 
@@ -265,7 +276,9 @@ export default {
 ### REST Endpoints
 
 #### POST `/api/index`
-Index documents from a directory.
+Index documents from a directory (legacy endpoint).
+
+**Note:** For long-running indexing operations, use the WebSocket endpoint `/ws/index` instead. This endpoint may timeout on cloud platforms with connection time limits (e.g., Azure's 3.5 minute limit).
 
 **Request:**
 ```json
@@ -280,7 +293,11 @@ Index documents from a directory.
   "success": true,
   "stats": {
     "files": 42,
-    "chunks": 387
+    "chunks": 387,
+    "new": 10,
+    "modified": 5,
+    "unchanged": 27,
+    "deleted": 2
   }
 }
 ```
@@ -296,7 +313,106 @@ Get indexing statistics.
 }
 ```
 
-### WebSocket Endpoint
+### WebSocket Endpoints
+
+#### WS `/ws/index`
+Real-time document indexing with progress updates. Recommended for production use to avoid timeout issues on cloud platforms.
+
+**Send:**
+```json
+{
+  "directory": "/path/to/docs"
+}
+```
+
+**Receive (multiple progress messages):**
+
+Scan start:
+```json
+{
+  "type": "scan_start",
+  "data": {
+    "directory": "/path/to/docs"
+  }
+}
+```
+
+File processing:
+```json
+{
+  "type": "file_processing",
+  "data": {
+    "file": "auth.md",
+    "status": "new"
+  }
+}
+```
+
+File processed:
+```json
+{
+  "type": "file_processed",
+  "data": {
+    "file": "auth.md",
+    "chunks": 12
+  }
+}
+```
+
+Embedding generation:
+```json
+{
+  "type": "embedding_start",
+  "data": {
+    "total_chunks": 387
+  }
+}
+```
+
+Final statistics:
+```json
+{
+  "type": "stats",
+  "data": {
+    "files": 42,
+    "chunks": 387,
+    "new": 10,
+    "modified": 5,
+    "unchanged": 27,
+    "deleted": 2
+  }
+}
+```
+
+Completion:
+```json
+{
+  "type": "done",
+  "data": {}
+}
+```
+
+Error (non-fatal):
+```json
+{
+  "type": "error",
+  "data": {
+    "message": "Failed to process file.txt"
+  }
+}
+```
+
+Fatal error:
+```json
+{
+  "type": "fatal_error",
+  "data": {
+    "message": "Invalid directory path"
+  }
+}
+```
+
+**Other message types:** `file_skipped`, `file_deleted`, `embedding_complete`, `saving`, `save_complete`
 
 #### WS `/ws/chat`
 Real-time chat with streaming responses.
@@ -577,12 +693,12 @@ MIT License - see [LICENSE](LICENSE) file for details
 ## Support
 
 - 📧 Email: hello@iceninemedia.com
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/doc-chat/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/yourusername/doc-chat/discussions)
+- 🐛 Issues: [GitHub Issues](https://github.com/john-mckillip/doc-chat/issues)
+- 💬 Discussions: [GitHub Discussions](https://github.com/john-mckillip/doc-chat/discussions)
 
 ## Changelog
 
-### v1.0.0 (2025-01-15)
+### v1.0.0 (2025-01-17)
 - Initial release
 - Basic indexing and chat functionality
 - WebSocket streaming support

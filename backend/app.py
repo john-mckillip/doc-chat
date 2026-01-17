@@ -3,16 +3,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict
 import json
+import os
+from dotenv import load_dotenv
 from indexer import DocumentIndexer
 from retriever import DocumentRetriever
 import asyncio
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI()
 
 # CORS for React dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite default port
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],  # Vite default port (both localhost and 127.0.0.1)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,6 +49,63 @@ async def index_documents(request: IndexRequest):
 async def get_stats():
     """Get indexing statistics"""
     return indexer.get_stats()
+
+@app.websocket("/ws/index")
+async def websocket_index(websocket: WebSocket):
+    """WebSocket endpoint for real-time indexing with progress updates"""
+    await websocket.accept()
+
+    try:
+        # Receive indexing request
+        data = await websocket.receive_text()
+        request_data = json.loads(data)
+        directory = request_data.get("directory")
+
+        if not directory:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "data": {"message": "No directory provided"}
+            }))
+            await websocket.close()
+            return
+
+        # Get the current event loop to pass to the thread
+        loop = asyncio.get_event_loop()
+
+        # Define progress callback to send updates via WebSocket
+        async def send_progress(message):
+            await websocket.send_text(json.dumps(message))
+
+        # Run indexing in a thread to avoid blocking
+        def run_indexing():
+            def progress_callback(msg):
+                # Schedule the coroutine on the main event loop
+                asyncio.run_coroutine_threadsafe(send_progress(msg), loop)
+
+            return indexer.index_directory(directory, progress_callback=progress_callback)
+
+        # Run in executor to avoid blocking
+        stats = await asyncio.to_thread(run_indexing)
+
+        # Send completion signal
+        await websocket.send_text(json.dumps({
+            "type": "done",
+            "data": {}
+        }))
+
+    except WebSocketDisconnect:
+        print("Client disconnected from indexing")
+    except Exception as e:
+        error_msg = f"Indexing error: {e}"
+        print(error_msg)
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "fatal_error",
+                "data": {"message": str(e)}
+            }))
+        except:
+            pass
+        await websocket.close()
 
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
