@@ -6,6 +6,7 @@ from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import hashlib
 import pickle
+import os
 
 class DocumentIndexer:
     def __init__(self, persist_directory: str = "./data/faiss_db"):
@@ -19,7 +20,7 @@ class DocumentIndexer:
 
         # Load embedding model
         print("Loading embedding model...")
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.model = SentenceTransformer(os.getenv("SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"))
         self.dimension = 384  # all-MiniLM-L6-v2 dimension
 
         # Load or create FAISS index
@@ -42,8 +43,8 @@ class DocumentIndexer:
             self.file_hashes = {}
         
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
+            chunk_size=int(os.getenv("CHUNK_SIZE", 1000)),
+            chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 200)),
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
@@ -52,7 +53,8 @@ class DocumentIndexer:
             return hashlib.md5(f.read()).hexdigest()
     
     def _should_index_file(self, filepath: Path) -> bool:
-        extensions = {'.md', '.txt', '.py', '.cs', '.js', '.ts', '.tsx', '.json', '.yaml', '.yml'}
+        file_types = os.getenv("INDEX_FILE_TYPES", ".md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml")
+        extensions = {ext.strip() for ext in file_types.split(',')}
         return filepath.suffix.lower() in extensions
     
     def _get_existing_hash(self, filepath: Path) -> str:

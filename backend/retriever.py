@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 class DocumentRetriever:
-    def __init__(self, persist_directory: str = "./data/faiss_db"):
+    def __init__(self, persist_directory: str = os.getenv("FAISS_PERSIST_DIR", "./data/faiss_db")):
         self.persist_directory = Path(persist_directory)
         self.index_file = self.persist_directory / "index.faiss"
         self.metadata_file = self.persist_directory / "metadata.pkl"
@@ -38,7 +38,7 @@ class DocumentRetriever:
 
         # Load embedding model
         print("Loading embedding model...")
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.model = SentenceTransformer(os.getenv("SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"))
 
         # Initialize Anthropic client
         self.anthropic_client = anthropic.Anthropic(

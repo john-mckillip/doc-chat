@@ -201,24 +201,36 @@ Create a `.env` file in the `backend/` directory:
 # Required
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Optional
-FAISS_PERSIST_DIR=./data/faiss_db
-MAX_CHUNKS_PER_FILE=50
-CHUNK_SIZE=1000
-CHUNK_OVERLAP=200
+# Optional - Vector Database
+FAISS_PERSIST_DIR=./data/faiss_db                    # Directory to persist FAISS index
+
+# Optional - Text Chunking
+CHUNK_SIZE=1000                                       # Size of text chunks for indexing
+CHUNK_OVERLAP=200                                     # Overlap between consecutive chunks
+
+# Optional - Embedding Model
+SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2          # Sentence transformer model name
+
+# Optional - File Types
+INDEX_FILE_TYPES=.md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml  # Comma-separated file extensions to index
 ```
 
 ### Customizing File Types
 
-Edit `backend/indexer.py`:
+You can customize which file types to index by setting the `INDEX_FILE_TYPES` environment variable in your `.env` file:
+
+```bash
+# Add more file extensions (comma-separated)
+INDEX_FILE_TYPES=.md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml,.java,.cpp,.go
+```
+
+Alternatively, you can edit `backend/indexer.py` directly:
 
 ```python
 def _should_index_file(self, filepath: Path) -> bool:
     """Check if file should be indexed"""
-    extensions = {
-        '.md', '.txt', '.py', '.cs', '.js', '.ts', 
-        '.tsx', '.json', '.yaml', '.yml'  # Add more here
-    }
+    file_types = os.getenv("INDEX_FILE_TYPES", ".md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml")
+    extensions = {ext.strip() for ext in file_types.split(',')}
     return filepath.suffix.lower() in extensions
 ```
 
@@ -227,11 +239,25 @@ def _should_index_file(self, filepath: Path) -> bool:
 Smaller chunks = more precise but less context
 Larger chunks = more context but less precise
 
+You can adjust chunk size and overlap via environment variables in your `.env` file:
+
+```bash
+# Smaller chunks for more precise results
+CHUNK_SIZE=500
+CHUNK_OVERLAP=100
+
+# Larger chunks for more context
+CHUNK_SIZE=2000
+CHUNK_OVERLAP=400
+```
+
+Alternatively, you can edit `backend/indexer.py` directly:
+
 ```python
 # In indexer.py
 self.text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,      # Adjust this
-    chunk_overlap=200,    # And this
+    chunk_size=int(os.getenv("CHUNK_SIZE", 1000)),
+    chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 200)),
     separators=["\n\n", "\n", ". ", " ", ""]
 )
 ```
@@ -620,13 +646,26 @@ results = self.store.search(
 
 ### Custom Embedding Models
 
-Replace sentence-transformers default model:
+You can use different sentence transformer models by setting the `SENTENCE_TRANSFORMER_MODEL` environment variable in your `.env` file:
+
+```bash
+# Larger, more accurate model
+SENTENCE_TRANSFORMER_MODEL=all-mpnet-base-v2
+
+# Smaller, faster model
+SENTENCE_TRANSFORMER_MODEL=paraphrase-MiniLM-L3-v2
+
+# Default model (if not set)
+SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
+```
+
+**Note:** When changing the embedding model, you'll need to re-index your documents as different models produce embeddings of different dimensions and characteristics.
+
+Alternatively, you can edit `backend/indexer.py` and `backend/retriever.py` directly:
 
 ```python
 # In indexer.py and retriever.py
-self.model = SentenceTransformer('all-mpnet-base-v2')  # Larger, more accurate
-# or
-self.model = SentenceTransformer('paraphrase-MiniLM-L3-v2')  # Smaller, faster
+self.model = SentenceTransformer(os.getenv("SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"))
 ```
 
 ### File Watching

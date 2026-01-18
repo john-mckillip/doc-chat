@@ -1,9 +1,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict
 import json
-import os
 from dotenv import load_dotenv
 from indexer import DocumentIndexer
 from retriever import DocumentRetriever
