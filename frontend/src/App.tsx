@@ -18,8 +18,29 @@ function App() {
   }, []);
 
   useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
+    let mounted = true;
+
+    const loadStats = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/stats');
+        const data = await response.json();
+        if (mounted) {
+          setStats(data);
+          setIsIndexed(data.total_chunks > 0);
+        }
+      } catch (error) {
+        if (mounted) {
+          console.error('Failed to fetch stats:', error);
+        }
+      }
+    };
+
+    loadStats();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleIndexComplete = useCallback(() => {
     fetchStats();

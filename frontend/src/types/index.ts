@@ -12,7 +12,7 @@ export interface Source {
 
 export interface WebSocketMessage {
     type: 'sources' | 'content' | 'done';
-    data?: any;
+    data?: Source[] | string | Record<string, unknown>;
 }
 
 export interface UseWebSocketReturn {

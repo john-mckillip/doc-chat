@@ -8,7 +8,7 @@ vi.mock('../components/Chat', () => ({
 }))
 
 vi.mock('../components/IndexStatus', () => ({
-  IndexStatus: ({ onIndexComplete }: any) => (
+  IndexStatus: ({ onIndexComplete }: { onIndexComplete: () => void }) => (
     <div data-testid="index-status">
       IndexStatus Component
       <button onClick={onIndexComplete}>Complete</button>
@@ -23,18 +23,18 @@ describe('App', () => {
   })
 
   it('renders without crashing', () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       json: async () => ({ total_chunks: 0 })
-    })
+    } as Response)
 
     render(<App />)
     expect(screen.getByTestId('index-status')).toBeInTheDocument()
   })
 
   it('fetches stats on mount', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       json: async () => ({ total_chunks: 100 })
-    })
+    } as Response)
 
     render(<App />)
 
@@ -44,9 +44,9 @@ describe('App', () => {
   })
 
   it('shows IndexStatus when not indexed', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       json: async () => ({ total_chunks: 0 })
-    })
+    } as Response)
 
     render(<App />)
 
@@ -56,9 +56,9 @@ describe('App', () => {
   })
 
   it('shows Chat when indexed', async () => {
-    (global.fetch as any).mockResolvedValueOnce({
+    vi.mocked(global.fetch).mockResolvedValueOnce({
       json: async () => ({ total_chunks: 100 })
-    })
+    } as Response)
 
     render(<App />)
 
@@ -69,7 +69,7 @@ describe('App', () => {
 
   it('handles fetch errors gracefully', async () => {
     const consoleError = vi.spyOn(console, 'error')
-    ;(global.fetch as any).mockRejectedValueOnce(new Error('Network error'))
+    vi.mocked(global.fetch).mockRejectedValueOnce(new Error('Network error'))
 
     render(<App />)
 
@@ -79,13 +79,13 @@ describe('App', () => {
   })
 
   it('refetches stats when onIndexComplete is called', async () => {
-    (global.fetch as any)
+    vi.mocked(global.fetch)
       .mockResolvedValueOnce({
         json: async () => ({ total_chunks: 0 })
-      })
+      } as Response)
       .mockResolvedValueOnce({
         json: async () => ({ total_chunks: 100 })
-      })
+      } as Response)
 
     const { getByText } = render(<App />)
 

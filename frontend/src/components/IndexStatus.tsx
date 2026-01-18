@@ -12,11 +12,7 @@ export const IndexStatus: React.FC<IndexStatusProps> = ({ stats, onIndexComplete
   const [error, setError] = useState<string | null>(null);
 
   // Update error from WebSocket
-  useEffect(() => {
-    if (wsError) {
-      setError(wsError);
-    }
-  }, [wsError]);
+  const displayError = wsError || error;
 
   // Notify parent when indexing completes
   useEffect(() => {
@@ -92,9 +88,9 @@ export const IndexStatus: React.FC<IndexStatusProps> = ({ stats, onIndexComplete
             </p>
           </div>
 
-          {error && (
+          {displayError && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-              <p className="text-sm text-red-800">{error}</p>
+              <p className="text-sm text-red-800">{displayError}</p>
             </div>
           )}
 

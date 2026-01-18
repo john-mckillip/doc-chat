@@ -43,7 +43,7 @@ export class MockWebSocket {
   }
 
   // Test helper methods
-  simulateMessage(data: any): void {
+  simulateMessage(data: string | Record<string, unknown>): void {
     if (this.onmessage) {
       const messageData = typeof data === 'string' ? data : JSON.stringify(data)
       this.onmessage(new MessageEvent('message', { data: messageData }))
@@ -75,10 +75,12 @@ export class MockWebSocket {
 
 // Global mock WebSocket
 export function setupWebSocketMock(): typeof MockWebSocket {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (global as any).WebSocket = MockWebSocket
   return MockWebSocket
 }
 
 export function resetWebSocketMock(): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   delete (global as any).WebSocket
 }
