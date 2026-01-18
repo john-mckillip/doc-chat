@@ -3,7 +3,6 @@ Tests for DocumentRetriever class and RAG functionality.
 """
 import pytest
 import json
-from unittest.mock import Mock, AsyncMock, patch
 
 
 class TestDocumentRetrieverInit:

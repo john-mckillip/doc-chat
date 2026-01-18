@@ -4,7 +4,6 @@ Tests for DocumentIndexer class and indexing functionality.
 import pytest
 from pathlib import Path
 import hashlib
-from unittest.mock import Mock, patch, call
 
 
 class TestDocumentIndexerInit:
@@ -247,6 +246,7 @@ class TestDirectoryIndexing:
         stats = indexer.index_directory(str(sample_docs), progress_callback=progress_callback)
 
         # Should receive various progress messages
+        assert stats["files"] > 0
         message_types = [msg["type"] for msg in messages]
         assert "scan_start" in message_types
         assert "file_processing" in message_types or "file_skipped" in message_types
@@ -341,6 +341,11 @@ class TestDirectoryIndexing:
         # Should have at least one error message
         error_messages = [msg for msg in messages if msg["type"] == "error"]
         assert len(error_messages) >= 1
+
+        # Assert stats - the good file should be indexed, bad file should error
+        assert stats["files"] == 1  # Only good.md should be successfully indexed
+        assert stats["chunks"] > 0  # Should have some chunks from good.md
+        assert stats["new"] == 1    # Good file is new
 
 
 class TestGetStats:
@@ -487,7 +492,6 @@ class TestHelperMethods:
     def test_process_deleted_files(self, temp_dir):
         """Test _process_deleted_files marks chunks and returns count."""
         from indexer import DocumentIndexer
-        from pathlib import Path
 
         indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
 
