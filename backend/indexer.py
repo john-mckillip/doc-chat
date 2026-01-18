@@ -437,3 +437,28 @@ class DocumentIndexer:
             "total_chunks": active_chunks,
             "dimension": self.dimension
         }
+
+    def get_indexed_files(self) -> Dict:
+        """Get detailed information about indexed files."""
+        # Group chunks by file
+        files_info = {}
+
+        for metadata in self.metadata:
+            if metadata.get('deleted', False):
+                continue
+
+            file_path = metadata.get('file_path')
+            if file_path not in files_info:
+                files_info[file_path] = {
+                    "file_path": file_path,
+                    "file_name": metadata.get('file_name'),
+                    "extension": metadata.get('extension'),
+                    "chunk_count": 0,
+                    "hash": metadata.get('hash')
+                }
+            files_info[file_path]["chunk_count"] += 1
+
+        return {
+            "total_files": len(files_info),
+            "files": list(files_info.values())
+        }

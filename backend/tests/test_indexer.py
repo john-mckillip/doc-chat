@@ -380,6 +380,77 @@ class TestGetStats:
         assert stats["dimension"] == 384
 
 
+class TestGetIndexedFiles:
+    """Test indexed files retrieval."""
+
+    def test_get_indexed_files_with_data(self, temp_dir):
+        """Test get_indexed_files returns file information correctly."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        indexer.metadata = [
+            {
+                "file_path": "/test/doc1.md",
+                "file_name": "doc1.md",
+                "extension": ".md",
+                "hash": "abc123",
+                "deleted": False
+            },
+            {
+                "file_path": "/test/doc1.md",
+                "file_name": "doc1.md",
+                "extension": ".md",
+                "hash": "abc123",
+                "deleted": False
+            },
+            {
+                "file_path": "/test/doc2.py",
+                "file_name": "doc2.py",
+                "extension": ".py",
+                "hash": "def456",
+                "deleted": False
+            },
+            {
+                "file_path": "/test/doc3.md",
+                "file_name": "doc3.md",
+                "extension": ".md",
+                "hash": "ghi789",
+                "deleted": True  # Should be excluded
+            },
+        ]
+
+        result = indexer.get_indexed_files()
+
+        assert result["total_files"] == 2
+        assert len(result["files"]) == 2
+
+        # Find doc1.md in results
+        doc1 = next(f for f in result["files"] if f["file_name"] == "doc1.md")
+        assert doc1["file_path"] == "/test/doc1.md"
+        assert doc1["extension"] == ".md"
+        assert doc1["chunk_count"] == 2
+        assert doc1["hash"] == "abc123"
+
+        # Find doc2.py in results
+        doc2 = next(f for f in result["files"] if f["file_name"] == "doc2.py")
+        assert doc2["chunk_count"] == 1
+
+        # doc3.md should not be in results (deleted)
+        doc3_list = [f for f in result["files"] if f["file_name"] == "doc3.md"]
+        assert len(doc3_list) == 0
+
+    def test_get_indexed_files_empty_index(self, temp_dir):
+        """Test get_indexed_files with empty index."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        result = indexer.get_indexed_files()
+
+        assert result["total_files"] == 0
+        assert result["files"] == []
+
+
 class TestHelperMethods:
     """Test the helper methods."""
 

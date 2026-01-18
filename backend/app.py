@@ -53,6 +53,12 @@ async def get_stats():
     return indexer.get_stats()
 
 
+@app.get("/api/indexed-files")
+async def get_indexed_files():
+    """Get detailed information about indexed files"""
+    return indexer.get_indexed_files()
+
+
 @app.websocket("/ws/index")
 async def websocket_index(websocket: WebSocket):
     """WebSocket endpoint for real-time indexing with progress updates"""
