@@ -27,12 +27,15 @@ app.add_middleware(
 indexer = DocumentIndexer()
 retriever = DocumentRetriever()
 
+
 class IndexRequest(BaseModel):
     directory: str
+
 
 class Message(BaseModel):
     role: str
     content: str
+
 
 @app.post("/api/index")
 async def index_documents(request: IndexRequest):
@@ -43,10 +46,12 @@ async def index_documents(request: IndexRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/stats")
 async def get_stats():
     """Get indexing statistics"""
     return indexer.get_stats()
+
 
 @app.websocket("/ws/index")
 async def websocket_index(websocket: WebSocket):
@@ -88,7 +93,7 @@ async def websocket_index(websocket: WebSocket):
         # Send completion signal
         await websocket.send_text(json.dumps({
             "type": "done",
-            "data": {}
+            "data": {"stats": stats}
         }))
 
     except WebSocketDisconnect:
@@ -101,54 +106,55 @@ async def websocket_index(websocket: WebSocket):
                 "type": "fatal_error",
                 "data": {"message": str(e)}
             }))
-        except:
+        except Exception:
             pass
         await websocket.close()
+
 
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     """WebSocket endpoint for real-time chat"""
     await websocket.accept()
     conversation_history = []
-    
+
     try:
         while True:
             # Receive message from client
             data = await websocket.receive_text()
             message_data = json.loads(data)
-            
+
             query = message_data.get("query")
             if not query:
                 continue
-            
+
             # Add user message to history
             conversation_history.append({
                 "role": "user",
                 "content": query
             })
-            
+
             # Stream response
             assistant_message = ""
             async for chunk in retriever.ask_streaming(query, conversation_history[:-1]):
                 await websocket.send_text(chunk)
-                
+
                 # Collect assistant message for history
                 chunk_data = json.loads(chunk)
                 if chunk_data["type"] == "content":
                     assistant_message += chunk_data["data"]
-            
+
             # Add complete assistant message to history
             if assistant_message:
                 conversation_history.append({
                     "role": "assistant",
                     "content": assistant_message
                 })
-            
+
             # Send completion signal
             await websocket.send_text(json.dumps({
                 "type": "done"
             }) + "\n")
-            
+
     except WebSocketDisconnect:
         print("Client disconnected")
     except Exception as e:
