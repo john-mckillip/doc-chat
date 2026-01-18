@@ -131,7 +131,7 @@ Please cite which files you're referencing in your answer."""
         # Stream the response
         with self.anthropic_client.messages.stream(
             model="claude-sonnet-4-20250514",
-            max_tokens=8192,
+            max_tokens=int(os.getenv("MAX_TOKENS", "16384")),
             messages=messages
         ) as stream:
             for text in stream.text_stream:

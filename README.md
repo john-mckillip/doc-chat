@@ -213,6 +213,9 @@ SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2          # Sentence transformer mode
 
 # Optional - File Types
 INDEX_FILE_TYPES=.md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml  # Comma-separated file extensions to index
+
+# Optional - AI Response Length
+MAX_TOKENS=16384                                      # Maximum tokens in AI responses (default: 16384, max: 200000)
 ```
 
 ### Customizing File Types
@@ -261,6 +264,25 @@ self.text_splitter = RecursiveCharacterTextSplitter(
     separators=["\n\n", "\n", ". ", " ", ""]
 )
 ```
+
+### Adjusting AI Response Length
+
+If AI responses are getting cut off, you can increase the maximum token limit via the `MAX_TOKENS` environment variable in your `.env` file:
+
+```bash
+# Default (approximately 12,000-16,000 words)
+MAX_TOKENS=16384
+
+# For longer responses (approximately 24,000-32,000 words)
+MAX_TOKENS=32768
+
+# Maximum supported by Claude Sonnet 4
+MAX_TOKENS=200000
+```
+
+The Claude Sonnet 4 model supports up to 200,000 output tokens, so you can set this as high as needed. Each token is roughly 3/4 of a word on average.
+
+**Note:** Higher values may increase API costs and response times, but ensure complete responses for complex questions.
 
 ## Tailwind CSS 4 Note
 
@@ -338,6 +360,38 @@ Get indexing statistics.
   "dimension": 384
 }
 ```
+
+#### GET `/api/indexed-files`
+Get detailed information about all indexed files.
+
+**Response:**
+```json
+{
+  "total_files": 42,
+  "files": [
+    {
+      "file_path": "/path/to/docs/auth.md",
+      "file_name": "auth.md",
+      "extension": ".md",
+      "chunk_count": 12,
+      "hash": "5d41402abc4b2a76b9719d911017c592"
+    },
+    {
+      "file_path": "/path/to/docs/api.md",
+      "file_name": "api.md",
+      "extension": ".md",
+      "chunk_count": 8,
+      "hash": "7d793037a0760186574b0282f2f435e7"
+    }
+  ]
+}
+```
+
+**Use this endpoint to:**
+- Debug indexing issues (verify expected files are indexed)
+- View which files are in the vector database
+- Check chunk counts per file
+- Verify file hashes for change detection
 
 ### WebSocket Endpoints
 
@@ -588,8 +642,14 @@ pip install -r requirements.txt
 
 ### Empty search results
 - Check that documents were indexed: `GET /api/stats`
-- Verify file extensions are supported in `indexer.py`
+- View which files are indexed: `GET /api/indexed-files`
+- Verify file extensions are supported (check `INDEX_FILE_TYPES` in `.env`)
 - Try re-indexing: Delete `data/faiss_db/` and re-index
+
+### AI responses getting cut off
+- Increase `MAX_TOKENS` in your `.env` file (default: 16384, max: 200000)
+- See the "Adjusting AI Response Length" section for details
+- Restart your backend server after changing `.env`
 
 ### Out of memory during indexing
 - Reduce chunk size in `indexer.py`
@@ -736,6 +796,46 @@ MIT License - see [LICENSE](LICENSE) file for details
 - 💬 Discussions: [GitHub Discussions](https://github.com/john-mckillip/doc-chat/discussions)
 
 ## Changelog
+
+### v1.1.0 (2025-01-18)
+**Configuration & Debugging Improvements**
+- Added configurable `MAX_TOKENS` environment variable for AI response length (fixes response cutoff issues)
+- Increased default max tokens from 8,192 to 16,384 (can be set up to 200,000)
+- Added `/api/indexed-files` REST endpoint for debugging indexing issues
+- Made indexer fully configurable via environment variables:
+  - `CHUNK_SIZE` - Size of text chunks for indexing (default: 1000)
+  - `CHUNK_OVERLAP` - Overlap between chunks (default: 200)
+  - `SENTENCE_TRANSFORMER_MODEL` - Embedding model selection (default: all-MiniLM-L6-v2)
+  - `INDEX_FILE_TYPES` - File extensions to index (default: .md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml)
+  - `FAISS_PERSIST_DIR` - Vector database location (default: ./data/faiss_db)
+
+**Code Quality**
+- Refactored `indexer.py` to reduce cyclomatic complexity from 28 to under 10
+- Added 6 new helper methods with single-responsibility design:
+  - `_get_file_status()` - Determine if file is new, modified, or unchanged
+  - `_process_single_file()` - Process individual file and create chunks
+  - `_process_deleted_files()` - Handle deleted file tracking
+  - `_add_documents_to_index()` - Generate embeddings and index documents
+  - `_scan_and_process_files()` - Scan directory for eligible files
+  - `_finalize_indexing()` - Complete indexing and print summary
+- Fixed all flake8 errors (E722, E501, C901)
+- Added flake8 configuration file with project-specific rules
+- Fixed bare `except` clause in app.py (now catches `Exception`)
+
+**Testing**
+- Added comprehensive test coverage for refactored helper methods (11 new tests)
+- Added tests for `/api/indexed-files` endpoint
+- Removed coverage files from git tracking (.coverage, htmlcov/, coverage.xml)
+- Updated CI/CD pipeline to trigger on feature branches
+- Achieved 97% test coverage on indexer.py
+
+**Documentation**
+- Enhanced README with:
+  - Configuration examples for all environment variables
+  - Troubleshooting section for AI response cutoffs
+  - Documentation of new `/api/indexed-files` endpoint
+  - "Adjusting AI Response Length" section with usage examples
+- Updated `.env.example` with all configurable options and helpful comments
 
 ### v1.0.0 (2025-01-17)
 - Initial release

@@ -316,7 +316,7 @@ class TestAnthropicIntegration:
             pass
 
         call_args = mock_stream.call_args
-        assert call_args[1]["max_tokens"] == 8192
+        assert call_args[1]["max_tokens"] == 16384
 
 
 class TestJSONSerialization:
