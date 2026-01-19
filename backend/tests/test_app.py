@@ -3,7 +3,6 @@ Tests for FastAPI application endpoints and WebSocket handlers.
 """
 import pytest
 import json
-from unittest.mock import Mock, patch, AsyncMock
 from fastapi.testclient import TestClient
 from fastapi.websockets import WebSocketDisconnect
 

@@ -6,12 +6,13 @@ from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import hashlib
 import pickle
+import os
+
 
 class DocumentIndexer:
     def __init__(self, persist_directory: str = "./data/faiss_db"):
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
-        
         self.index_file = self.persist_directory / "index.faiss"
         self.metadata_file = self.persist_directory / "metadata.pkl"
         self.texts_file = self.persist_directory / "texts.pkl"
@@ -19,7 +20,8 @@ class DocumentIndexer:
 
         # Load embedding model
         print("Loading embedding model...")
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.model = SentenceTransformer(
+            os.getenv("SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"))
         self.dimension = 384  # all-MiniLM-L6-v2 dimension
 
         # Load or create FAISS index
@@ -40,21 +42,22 @@ class DocumentIndexer:
                 self.file_hashes = pickle.load(f)
         else:
             self.file_hashes = {}
-        
+
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
+            chunk_size=int(os.getenv("CHUNK_SIZE", 1000)),
+            chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 200)),
             separators=["\n\n", "\n", ". ", " ", ""]
         )
-    
+
     def _get_file_hash(self, filepath: Path) -> str:
         with open(filepath, 'rb') as f:
             return hashlib.md5(f.read()).hexdigest()
-    
+
     def _should_index_file(self, filepath: Path) -> bool:
-        extensions = {'.md', '.txt', '.py', '.cs', '.js', '.ts', '.tsx', '.json', '.yaml', '.yml'}
+        file_types = os.getenv("INDEX_FILE_TYPES", ".md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml")
+        extensions = {ext.strip() for ext in file_types.split(',')}
         return filepath.suffix.lower() in extensions
-    
+
     def _get_existing_hash(self, filepath: Path) -> str:
         """Get stored hash for a file, or None if not indexed"""
         return self.file_hashes.get(str(filepath))
@@ -66,139 +69,288 @@ class DocumentIndexer:
             if metadata.get('file_path') == filepath_str and not metadata.get('deleted', False):
                 metadata['deleted'] = True
 
-    def _save(self):
-        """Save index and metadata to disk"""
-        faiss.write_index(self.index, str(self.index_file))
-        with open(self.metadata_file, 'wb') as f:
-            pickle.dump(self.metadata, f)
-        with open(self.texts_file, 'wb') as f:
-            pickle.dump(self.texts, f)
-        with open(self.file_hashes_file, 'wb') as f:
-            pickle.dump(self.file_hashes, f)
-    
-    def index_directory(self, directory: str, progress_callback: Optional[Callable] = None) -> Dict[str, int]:
-        docs_path = Path(directory)
-        documents = []
-        stats = {"files": 0, "chunks": 0, "new": 0, "modified": 0, "unchanged": 0, "deleted": 0}
+    def _get_file_status(self, filepath: Path, file_hash: str) -> tuple[str, bool]:
+        """
+        Determine if a file is new, modified, or unchanged.
 
-        print(f"Smart indexing directory: {directory}")
+        Args:
+            filepath: Path to the file
+            file_hash: Current hash of the file
+
+        Returns:
+            Tuple of (status, should_skip) where:
+            - status is "new", "modified", or "unchanged"
+            - should_skip is True if file should be skipped (unchanged)
+        """
+        existing_hash = self._get_existing_hash(filepath)
+
+        if existing_hash is None:
+            return ("new", False)
+        elif existing_hash != file_hash:
+            self._mark_file_chunks_deleted(filepath)
+            return ("modified", False)
+        else:
+            return ("unchanged", True)
+
+    def _process_single_file(
+        self,
+        filepath: Path,
+        content: str,
+        file_hash: str,
+        file_status: str,
+        progress_callback: Optional[Callable] = None
+    ) -> list[Dict]:
+        """
+        Process a single file and create document chunks.
+
+        Args:
+            filepath: Path to the file
+            content: File content
+            file_hash: Hash of the file
+            file_status: Status of the file ("new" or "modified")
+            progress_callback: Optional callback for progress updates
+
+        Returns:
+            List of document dictionaries with text and metadata
+        """
+        filepath_str = str(filepath)
+
+        # Notify about file processing
         if progress_callback:
-            progress_callback({"type": "scan_start", "data": {"directory": directory}})
+            progress_callback({
+                "type": "file_processing",
+                "data": {"file": filepath.name, "status": file_status}
+            })
 
-        # Track which files we've seen
-        current_files = set()
+        # Split text into chunks
+        chunks = self.text_splitter.split_text(content)
 
-        # Scan for new and modified files
-        for filepath in docs_path.rglob("*"):
-            if filepath.is_file() and self._should_index_file(filepath):
-                filepath_str = str(filepath)
-                current_files.add(filepath_str)
+        # Create documents
+        documents = []
+        for i, chunk in enumerate(chunks):
+            documents.append({
+                "text": chunk,
+                "metadata": {
+                    "file_path": filepath_str,
+                    "file_name": filepath.name,
+                    "chunk_index": i,
+                    "hash": file_hash,
+                    "extension": filepath.suffix,
+                    "deleted": False
+                }
+            })
 
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        content = f.read()
+        # Update hash in tracking
+        self.file_hashes[filepath_str] = file_hash
 
-                    if not content.strip():
-                        continue
+        # Log and notify completion
+        status_text = 'Added' if file_status == 'new' else 'Updated'
+        print(f"{status_text}:{filepath.name} ({len(chunks)} chunks)")
 
-                    file_hash = self._get_file_hash(filepath)
-                    existing_hash = self._get_existing_hash(filepath)
+        if progress_callback:
+            progress_callback({
+                "type": "file_processed",
+                "data": {
+                    "file": filepath.name,
+                    "chunks": len(chunks),
+                    "status": file_status
+                }
+            })
 
-                    # Check if file is new or modified
-                    if existing_hash is None:
-                        # New file
-                        file_status = "new"
-                        stats["new"] += 1
-                    elif existing_hash != file_hash:
-                        # Modified file - mark old chunks as deleted
-                        file_status = "modified"
-                        stats["modified"] += 1
-                        self._mark_file_chunks_deleted(filepath)
-                    else:
-                        # Unchanged file - skip
-                        stats["unchanged"] += 1
-                        if progress_callback:
-                            progress_callback({"type": "file_skipped", "data": {"file": filepath.name, "status": "unchanged"}})
-                        continue
+        return documents
 
-                    # Notify about file processing
-                    if progress_callback:
-                        progress_callback({"type": "file_processing", "data": {"file": filepath.name, "status": file_status}})
+    def _process_deleted_files(
+        self,
+        current_files: set,
+        progress_callback: Optional[Callable] = None
+    ) -> int:
+        """
+        Mark chunks from deleted files and remove from tracking.
 
-                    # Process new or modified file
-                    chunks = self.text_splitter.split_text(content)
+        Args:
+            current_files: Set of current file paths as strings
+            progress_callback: Optional callback for progress updates
 
-                    for i, chunk in enumerate(chunks):
-                        documents.append({
-                            "text": chunk,
-                            "metadata": {
-                                "file_path": filepath_str,
-                                "file_name": filepath.name,
-                                "chunk_index": i,
-                                "hash": file_hash,
-                                "extension": filepath.suffix,
-                                "deleted": False
-                            }
-                        })
+        Returns:
+            Number of files deleted
+        """
+        deleted_count = 0
 
-                    # Update hash in tracking
-                    self.file_hashes[filepath_str] = file_hash
-
-                    stats["files"] += 1
-                    stats["chunks"] += len(chunks)
-                    print(f"{'Added' if file_status == 'new' else 'Updated'}: {filepath.name} ({len(chunks)} chunks)")
-
-                    if progress_callback:
-                        progress_callback({"type": "file_processed", "data": {"file": filepath.name, "chunks": len(chunks), "status": file_status}})
-
-                except Exception as e:
-                    error_msg = f"Error indexing {filepath}: {e}"
-                    print(error_msg)
-                    if progress_callback:
-                        progress_callback({"type": "error", "data": {"file": filepath.name, "message": str(e)}})
-
-        # Mark chunks from deleted files
         for filepath_str in list(self.file_hashes.keys()):
             if filepath_str not in current_files:
                 self._mark_file_chunks_deleted(Path(filepath_str))
                 del self.file_hashes[filepath_str]
-                stats["deleted"] += 1
+                deleted_count += 1
                 print(f"Removed: {Path(filepath_str).name}")
+
                 if progress_callback:
-                    progress_callback({"type": "file_deleted", "data": {"file": Path(filepath_str).name}})
+                    progress_callback({
+                        "type": "file_deleted",
+                        "data": {"file": Path(filepath_str).name}
+                    })
 
+        return deleted_count
+
+    def _add_documents_to_index(
+        self,
+        documents: list[Dict],
+        progress_callback: Optional[Callable] = None
+    ):
+        """
+        Generate embeddings and add documents to the FAISS index.
+
+        Args:
+            documents: List of document dictionaries with text and metadata
+            progress_callback: Optional callback for progress updates
+        """
+        if not documents:
+            return
+
+        print(f"\nGenerating embeddings for {len(documents)} chunks...")
+        if progress_callback:
+            progress_callback({
+                "type": "embedding_start",
+                "data": {"total_chunks": len(documents)}
+            })
+
+        # Generate embeddings
+        texts = [d["text"] for d in documents]
+        embeddings = self.model.encode(texts, show_progress_bar=True)
+
+        if progress_callback:
+            progress_callback({
+                "type": "embedding_complete",
+                "data": {"total_chunks": len(documents)}
+            })
+
+        # Add to index
+        if progress_callback:
+            progress_callback({"type": "saving", "data": {}})
+
+        self.index.add(np.array(embeddings).astype('float32'))
+        self.metadata.extend([d["metadata"] for d in documents])
+        self.texts.extend(texts)
+
+        # Save to disk
+        self._save()
+
+        if progress_callback:
+            progress_callback({"type": "save_complete", "data": {}})
+
+    def _scan_and_process_files(
+        self,
+        docs_path: Path,
+        current_files: set,
+        stats: Dict[str, int],
+        progress_callback: Optional[Callable] = None
+    ) -> list[Dict]:
+        """
+        Scan directory and process all eligible files.
+
+        Args:
+            docs_path: Path to directory to scan
+            current_files: Set to populate with current file paths
+            stats: Statistics dictionary to update
+            progress_callback: Optional callback for progress updates
+
+        Returns:
+            List of all document chunks from processed files
+        """
+        documents = []
+
+        for filepath in docs_path.rglob("*"):
+            if not (filepath.is_file() and self._should_index_file(filepath)):
+                continue
+
+            filepath_str = str(filepath)
+            current_files.add(filepath_str)
+
+            try:
+                # Read file content
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                if not content.strip():
+                    continue
+
+                # Determine file status
+                file_hash = self._get_file_hash(filepath)
+                file_status, should_skip = self._get_file_status(
+                    filepath,
+                    file_hash
+                )
+
+                # Update stats
+                stats[file_status] += 1
+
+                # Skip unchanged files
+                if should_skip:
+                    if progress_callback:
+                        progress_callback({
+                            "type": "file_skipped",
+                            "data": {
+                                "file": filepath.name,
+                                "status": "unchanged"
+                            }
+                        })
+                    continue
+
+                # Process file and collect documents
+                file_docs = self._process_single_file(
+                    filepath,
+                    content,
+                    file_hash,
+                    file_status,
+                    progress_callback
+                )
+                documents.extend(file_docs)
+
+                # Update stats
+                stats["files"] += 1
+                stats["chunks"] += len(file_docs)
+
+            except Exception as e:
+                print(f"Error indexing {filepath}: {e}")
+                if progress_callback:
+                    progress_callback({
+                        "type": "error",
+                        "data": {
+                            "file": filepath.name,
+                            "message": str(e)
+                        }
+                    })
+
+        return documents
+
+    def _finalize_indexing(
+        self,
+        documents: list[Dict],
+        stats: Dict[str, int],
+        progress_callback: Optional[Callable] = None
+    ):
+        """
+        Add documents to index and print summary.
+
+        Args:
+            documents: List of documents to add
+            stats: Statistics dictionary
+            progress_callback: Optional callback for progress updates
+        """
         if documents:
-            print(f"\nGenerating embeddings for {len(documents)} chunks...")
-            if progress_callback:
-                progress_callback({"type": "embedding_start", "data": {"total_chunks": len(documents)}})
-
-            # Generate embeddings for new chunks
-            texts = [d["text"] for d in documents]
-            embeddings = self.model.encode(texts, show_progress_bar=True)
-
-            if progress_callback:
-                progress_callback({"type": "embedding_complete", "data": {"total_chunks": len(documents)}})
-
-            # Add new chunks to existing index (incremental)
-            if progress_callback:
-                progress_callback({"type": "saving", "data": {}})
-
-            self.index.add(np.array(embeddings).astype('float32'))
-            self.metadata.extend([d["metadata"] for d in documents])
-            self.texts.extend(texts)
-
-            # Save to disk
-            self._save()
-
-            if progress_callback:
-                progress_callback({"type": "save_complete", "data": {}})
-
-            print(f"✓ Processed {stats['files']} files ({stats['new']} new, {stats['modified']} modified, {stats['unchanged']} unchanged)")
+            self._add_documents_to_index(documents, progress_callback)
+            print(
+                f"✓ Processed {stats['files']} files "
+                f"({stats['new']} new, {stats['modified']} modified, "
+                f"{stats['unchanged']} unchanged)"
+            )
             if stats['deleted'] > 0:
                 print(f"  Removed {stats['deleted']} deleted files")
         else:
             if stats['unchanged'] > 0:
-                print(f"✓ No changes detected ({stats['unchanged']} files unchanged)")
+                print(
+                    f"✓ No changes detected "
+                    f"({stats['unchanged']} files unchanged)"
+                )
             else:
                 print("No documents found to index")
 
@@ -210,16 +362,103 @@ class DocumentIndexer:
                 if progress_callback:
                     progress_callback({"type": "save_complete", "data": {}})
 
+    def _save(self):
+        """Save index and metadata to disk"""
+        faiss.write_index(self.index, str(self.index_file))
+        with open(self.metadata_file, 'wb') as f:
+            pickle.dump(self.metadata, f)
+        with open(self.texts_file, 'wb') as f:
+            pickle.dump(self.texts, f)
+        with open(self.file_hashes_file, 'wb') as f:
+            pickle.dump(self.file_hashes, f)
+
+    def index_directory(
+        self,
+        directory: str,
+        progress_callback: Optional[Callable] = None
+    ) -> Dict[str, int]:
+        """
+        Index all eligible files in a directory.
+
+        Args:
+            directory: Path to directory to index
+            progress_callback: Optional callback for progress updates
+
+        Returns:
+            Dictionary with indexing statistics
+        """
+        docs_path = Path(directory)
+        stats = {
+            "files": 0,
+            "chunks": 0,
+            "new": 0,
+            "modified": 0,
+            "unchanged": 0,
+            "deleted": 0
+        }
+
+        print(f"Smart indexing directory: {directory}")
+        if progress_callback:
+            progress_callback({
+                "type": "scan_start",
+                "data": {"directory": directory}
+            })
+
+        # Track which files we've seen
+        current_files = set()
+
+        # Scan and process all files
+        documents = self._scan_and_process_files(
+            docs_path,
+            current_files,
+            stats,
+            progress_callback
+        )
+
+        # Handle deleted files
+        stats["deleted"] = self._process_deleted_files(
+            current_files,
+            progress_callback
+        )
+
+        # Add documents to index and report
+        self._finalize_indexing(documents, stats, progress_callback)
+
         # Send final stats
         if progress_callback:
             progress_callback({"type": "stats", "data": stats})
 
         return stats
-    
+
     def get_stats(self) -> Dict:
         # Count only non-deleted chunks
         active_chunks = sum(1 for m in self.metadata if not m.get('deleted', False))
         return {
             "total_chunks": active_chunks,
             "dimension": self.dimension
+        }
+
+    def get_indexed_files(self) -> Dict:
+        """Get detailed information about indexed files."""
+        # Group chunks by file
+        files_info = {}
+
+        for metadata in self.metadata:
+            if metadata.get('deleted', False):
+                continue
+
+            file_path = metadata.get('file_path')
+            if file_path not in files_info:
+                files_info[file_path] = {
+                    "file_path": file_path,
+                    "file_name": metadata.get('file_name'),
+                    "extension": metadata.get('extension'),
+                    "chunk_count": 0,
+                    "hash": metadata.get('hash')
+                }
+            files_info[file_path]["chunk_count"] += 1
+
+        return {
+            "total_files": len(files_info),
+            "files": list(files_info.values())
         }

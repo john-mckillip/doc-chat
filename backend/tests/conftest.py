@@ -8,7 +8,7 @@ import sys
 import pytest
 import numpy as np
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, AsyncMock
+from unittest.mock import Mock
 import tempfile
 import shutil
 
@@ -196,7 +196,6 @@ def retriever_with_index(temp_dir, mock_anthropic_client):
     """Create a retriever with a pre-loaded index."""
     import pickle
     from retriever import DocumentRetriever
-    import faiss
 
     # Create index directory
     faiss_dir = temp_dir / "faiss_db"
