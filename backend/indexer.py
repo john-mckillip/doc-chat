@@ -30,7 +30,6 @@ EXCLUDED_FILES = {
     'pnpm-lock.yaml', '.DS_Store', 'Thumbs.db'
 }
 
-
 class DocumentIndexer:
     def __init__(self, persist_directory: str = "./data/faiss_db"):
         self.persist_directory = Path(persist_directory)
@@ -96,8 +95,7 @@ class DocumentIndexer:
                 return False
 
         # Check extension
-        file_types = os.getenv("INDEX_FILE_TYPES", ".md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml")
-        extensions = {ext.strip() for ext in file_types.split(',')}
+        extensions = {'.md', '.txt', '.py', '.cs', '.js', '.ts', '.tsx', '.json', '.yaml', '.yml'}
         return filepath.suffix.lower() in extensions
 
     def _get_existing_hash(self, filepath: Path) -> str:
