@@ -98,8 +98,9 @@ class DocumentIndexer:
             if part in EXCLUDED_DIRS:
                 return False
 
-        # Check extension
-        extensions = {'.md', '.txt', '.py', '.cs', '.js', '.ts', '.tsx', '.json', '.yaml', '.yml'}
+        # Check extension (configurable via INDEX_FILE_TYPES env var)
+        file_types = os.getenv("INDEX_FILE_TYPES", ".md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml")
+        extensions = {ext.strip() for ext in file_types.split(',')}
         return filepath.suffix.lower() in extensions
 
     def _get_existing_hash(self, filepath: Path) -> str:

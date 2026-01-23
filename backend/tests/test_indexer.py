@@ -126,6 +126,34 @@ class TestFileFiltering:
 
         assert indexer._should_index_file(filepath) == should_index
 
+    def test_should_index_file_excludes_files(self, temp_dir):
+        """Test that EXCLUDED_FILES are not indexed."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        # These should be excluded
+        assert indexer._should_index_file(Path("package-lock.json")) is False
+        assert indexer._should_index_file(Path("yarn.lock")) is False
+        assert indexer._should_index_file(Path("packages.lock.json")) is False
+        assert indexer._should_index_file(Path("pnpm-lock.yaml")) is False
+
+    def test_should_index_file_excludes_directories(self, temp_dir):
+        """Test that files in EXCLUDED_DIRS are not indexed."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        # These should be excluded due to directory
+        assert indexer._should_index_file(Path("/project/node_modules/package/index.js")) is False
+        assert indexer._should_index_file(Path("/project/bin/Debug/app.dll")) is False
+        assert indexer._should_index_file(Path("/project/.git/config")) is False
+        assert indexer._should_index_file(Path("/project/venv/lib/site.py")) is False
+        assert indexer._should_index_file(Path("/project/dist/bundle.js")) is False
+
+        # This should be allowed (not in excluded dir)
+        assert indexer._should_index_file(Path("/project/src/index.js")) is True
+
 
 class TestHashTracking:
     """Test file hash tracking for incremental indexing."""
@@ -449,6 +477,198 @@ class TestGetIndexedFiles:
 
         assert result["total_files"] == 0
         assert result["files"] == []
+
+
+class TestDeviceDetection:
+    """Test GPU/CPU device detection."""
+
+    def test_detect_device_with_gpu(self, temp_dir, mocker):
+        """Test device detection when GPU is available."""
+        from indexer import DocumentIndexer
+        import torch
+
+        # Mock CUDA availability
+        mocker.patch.object(torch.cuda, 'is_available', return_value=True)
+        mocker.patch.object(torch.cuda, 'get_device_name', return_value='NVIDIA Test GPU')
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        assert indexer.device == "cuda:0"
+        assert indexer.use_multiprocess is False
+
+    def test_detect_device_without_gpu(self, temp_dir, mocker):
+        """Test device detection when no GPU is available."""
+        from indexer import DocumentIndexer
+        import torch
+
+        # Mock CUDA unavailable
+        mocker.patch.object(torch.cuda, 'is_available', return_value=False)
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        assert indexer.device == "cpu"
+        assert indexer.use_multiprocess is True
+
+
+class TestMultiprocessEncoding:
+    """Test multiprocessing encoding functionality."""
+
+    def test_encode_in_batches_uses_multiprocess_when_threshold_met(self, temp_dir, mocker):
+        """Test that multiprocessing is used when chunk count exceeds threshold."""
+        from indexer import DocumentIndexer
+        import indexer as indexer_module
+
+        # Set low threshold for testing
+        mocker.patch.object(indexer_module, 'MIN_CHUNKS_FOR_MULTIPROCESS', 5)
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        indexer.use_multiprocess = True
+
+        # Mock _encode_multiprocess to verify it's called
+        mock_multiprocess = mocker.patch.object(
+            indexer,
+            '_encode_multiprocess',
+            return_value=mocker.MagicMock()
+        )
+
+        texts = ["text"] * 10  # Above threshold
+
+        indexer._encode_in_batches(texts)
+
+        mock_multiprocess.assert_called_once()
+
+    def test_encode_multiprocess(self, temp_dir, mocker):
+        """Test _encode_multiprocess method."""
+        from indexer import DocumentIndexer
+        import numpy as np
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        # Mock the multiprocess pool methods
+        mock_pool = mocker.MagicMock()
+        mock_embeddings = np.random.rand(3, 384).astype('float32')
+
+        mocker.patch.object(
+            indexer.model,
+            'start_multi_process_pool',
+            return_value=mock_pool
+        )
+        mocker.patch.object(
+            indexer.model,
+            'encode_multi_process',
+            return_value=mock_embeddings
+        )
+        mocker.patch.object(
+            indexer.model,
+            'stop_multi_process_pool'
+        )
+
+        texts = ["text1", "text2", "text3"]
+        messages = []
+
+        def callback(msg):
+            messages.append(msg)
+
+        result = indexer._encode_multiprocess(texts, callback)
+
+        assert result is mock_embeddings
+        indexer.model.start_multi_process_pool.assert_called_once()
+        indexer.model.encode_multi_process.assert_called_once()
+        indexer.model.stop_multi_process_pool.assert_called_once_with(mock_pool)
+
+        # Check callbacks were made
+        message_types = [msg["type"] for msg in messages]
+        assert "embedding_info" in message_types
+        assert "embedding_progress" in message_types
+
+    def test_encode_multiprocess_cleans_up_on_error(self, temp_dir, mocker):
+        """Test that multiprocess pool is cleaned up even on error."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        mock_pool = mocker.MagicMock()
+        mocker.patch.object(
+            indexer.model,
+            'start_multi_process_pool',
+            return_value=mock_pool
+        )
+        mocker.patch.object(
+            indexer.model,
+            'encode_multi_process',
+            side_effect=RuntimeError("Test error")
+        )
+        mock_stop = mocker.patch.object(
+            indexer.model,
+            'stop_multi_process_pool'
+        )
+
+        texts = ["text1", "text2"]
+
+        with pytest.raises(RuntimeError):
+            indexer._encode_multiprocess(texts)
+
+        # Pool should still be cleaned up
+        mock_stop.assert_called_once_with(mock_pool)
+
+
+class TestFinalizeIndexing:
+    """Test _finalize_indexing method."""
+
+    def test_finalize_indexing_with_deletions_only(self, temp_dir, mocker):
+        """Test _finalize_indexing saves when there are only deletions."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        # Mock _save to verify it's called
+        mock_save = mocker.patch.object(indexer, '_save')
+
+        stats = {
+            "files": 0,
+            "chunks": 0,
+            "new": 0,
+            "modified": 0,
+            "unchanged": 0,
+            "deleted": 2  # Has deletions
+        }
+
+        messages = []
+
+        def callback(msg):
+            messages.append(msg)
+
+        indexer._finalize_indexing([], stats, callback)
+
+        # Should have called _save due to deletions
+        mock_save.assert_called_once()
+
+        # Should have sent saving/save_complete messages
+        message_types = [msg["type"] for msg in messages]
+        assert "saving" in message_types
+        assert "save_complete" in message_types
+
+    def test_finalize_indexing_no_changes(self, temp_dir, mocker):
+        """Test _finalize_indexing with no changes and no deletions."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        mock_save = mocker.patch.object(indexer, '_save')
+
+        stats = {
+            "files": 0,
+            "chunks": 0,
+            "new": 0,
+            "modified": 0,
+            "unchanged": 5,
+            "deleted": 0
+        }
+
+        indexer._finalize_indexing([], stats)
+
+        # Should NOT have called _save (no deletions)
+        mock_save.assert_not_called()
 
 
 class TestHelperMethods:
