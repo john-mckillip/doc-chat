@@ -852,7 +852,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## Changelog
 
-### v1.2.0 (2025-01-22)
+### v1.2.0 (2026-01-22)
 **Performance Optimization**
 - Automatic GPU detection and CUDA acceleration for embedding generation (6-10x speedup)
 - CPU multiprocessing for embedding generation on systems without GPU (3-4x speedup)
@@ -860,7 +860,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 - New environment variables for tuning embedding performance (`EMBEDDING_BATCH_SIZE`, `EMBEDDING_MAX_WORKERS`, etc.)
 - Added directory/file exclusions for indexing (node_modules, bin, obj, etc.)
 
-### v1.1.0 (2025-01-18)
+### v1.1.0 (2026-01-18)
 **Configuration & Debugging Improvements**
 - Added configurable `MAX_TOKENS` environment variable for AI response length (fixes response cutoff issues)
 - Increased default max tokens from 8,192 to 16,384 (can be set up to 200,000)
@@ -900,7 +900,7 @@ MIT License - see [LICENSE](LICENSE) file for details
   - "Adjusting AI Response Length" section with usage examples
 - Updated `.env.example` with all configurable options and helpful comments
 
-### v1.0.0 (2025-01-17)
+### v1.0.0 (2026-01-17)
 - Initial release
 - Basic indexing and chat functionality
 - WebSocket streaming support
