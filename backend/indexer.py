@@ -14,7 +14,10 @@ DEFAULT_BATCH_SIZE = int(os.environ.get("EMBEDDING_BATCH_SIZE", "64"))  # GPU ba
 CPU_BATCH_SIZE = int(os.environ.get("EMBEDDING_CPU_BATCH_SIZE", "32"))  # Smaller for CPU
 MAX_CPU_WORKERS = int(os.environ.get("EMBEDDING_MAX_WORKERS", "4"))     # For CPU multiprocessing
 FILE_IO_WORKERS = int(os.environ.get("FILE_IO_WORKERS", "8"))          # For parallel file reading
-MIN_CHUNKS_FOR_MULTIPROCESS = 100  # Skip multiprocessing overhead for small datasets
+# CPU multiprocessing threshold - disabled by default (999999) because it causes
+# noisy output on WSL2/Windows due to process spawning re-importing modules.
+# Set to a lower value (e.g., 500) via env var to enable for large datasets on native Linux.
+MIN_CHUNKS_FOR_MULTIPROCESS = int(os.environ.get("MIN_CHUNKS_FOR_MULTIPROCESS", "999999"))
 
 # Directory and file exclusions for indexing
 EXCLUDED_DIRS = {
@@ -29,6 +32,7 @@ EXCLUDED_FILES = {
     'package-lock.json', 'yarn.lock', 'packages.lock.json',
     'pnpm-lock.yaml', '.DS_Store', 'Thumbs.db'
 }
+
 
 class DocumentIndexer:
     def __init__(self, persist_directory: str = "./data/faiss_db"):

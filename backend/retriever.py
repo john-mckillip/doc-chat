@@ -16,26 +16,13 @@ class DocumentRetriever:
         self.metadata_file = self.persist_directory / "metadata.pkl"
         self.texts_file = self.persist_directory / "texts.pkl"
 
-        # Check if index exists
-        if self.index_file.exists():
-            # Load FAISS index
-            print("Loading FAISS index...")
-            self.index = faiss.read_index(str(self.index_file))
+        # Initialize index state
+        self.index = None
+        self.metadata = []
+        self.texts = []
 
-            # Load metadata and texts
-            with open(self.metadata_file, 'rb') as f:
-                self.metadata = pickle.load(f)
-
-            with open(self.texts_file, 'rb') as f:
-                self.texts = pickle.load(f)
-
-            print(f"✓ Loaded {len(self.texts)} document chunks")
-        else:
-            # No index yet - will be created when documents are indexed
-            print("No index found - please index documents first")
-            self.index = None
-            self.metadata = []
-            self.texts = []
+        # Try to load existing index
+        self._load_index()
 
         # Load embedding model
         print("Loading embedding model...")
@@ -50,6 +37,30 @@ class DocumentRetriever:
         self.anthropic_client = anthropic.Anthropic(
             api_key=os.getenv("ANTHROPIC_API_KEY")
         )
+
+    def _load_index(self):
+        """Load the FAISS index and associated data from disk."""
+        if self.index_file.exists():
+            print("Loading FAISS index...")
+            self.index = faiss.read_index(str(self.index_file))
+
+            with open(self.metadata_file, 'rb') as f:
+                self.metadata = pickle.load(f)
+
+            with open(self.texts_file, 'rb') as f:
+                self.texts = pickle.load(f)
+
+            print(f"✓ Loaded {len(self.texts)} document chunks")
+        else:
+            print("No index found - please index documents first")
+            self.index = None
+            self.metadata = []
+            self.texts = []
+
+    def reload(self):
+        """Reload the index from disk. Call after indexing completes."""
+        print("Reloading index...")
+        self._load_index()
 
     def search(self, query: str, top_k: int = 5) -> List[Dict]:
         """Search for relevant documents"""

@@ -223,6 +223,7 @@ EMBEDDING_BATCH_SIZE=64        # Batch size for GPU encoding
 EMBEDDING_CPU_BATCH_SIZE=32    # Batch size for CPU encoding
 EMBEDDING_MAX_WORKERS=4        # Number of CPU workers for multiprocessing
 FILE_IO_WORKERS=8              # Workers for parallel file reading
+MIN_CHUNKS_FOR_MULTIPROCESS=999999  # Chunk threshold to enable CPU multiprocessing (default: disabled)
 ```
 
 ### Customizing File Types
@@ -729,6 +730,7 @@ Adjust embedding performance via environment variables:
 | `EMBEDDING_CPU_BATCH_SIZE` | 32 | Batch size for CPU encoding |
 | `EMBEDDING_MAX_WORKERS` | 4 | Number of CPU processes for multiprocessing |
 | `FILE_IO_WORKERS` | 8 | Workers for parallel file reading |
+| `MIN_CHUNKS_FOR_MULTIPROCESS` | 999999 | Chunk threshold to enable CPU multiprocessing. Set to 500-1000 on native Linux for large datasets. Disabled by default due to noisy output on WSL2/Windows |
 
 **Performance by dataset size:**
 
