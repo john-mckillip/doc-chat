@@ -1,11 +1,21 @@
 from pathlib import Path
-from typing import Dict, Callable, Optional
+from typing import Dict, Callable, Optional, List
 import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import hashlib
 import pickle
+import torch
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Embedding configuration - can be overridden via environment variables
+DEFAULT_BATCH_SIZE = int(os.environ.get("EMBEDDING_BATCH_SIZE", "64"))  # GPU batch size
+CPU_BATCH_SIZE = int(os.environ.get("EMBEDDING_CPU_BATCH_SIZE", "32"))  # Smaller for CPU
+MAX_CPU_WORKERS = int(os.environ.get("EMBEDDING_MAX_WORKERS", "4"))     # For CPU multiprocessing
+FILE_IO_WORKERS = int(os.environ.get("FILE_IO_WORKERS", "8"))          # For parallel file reading
+MIN_CHUNKS_FOR_MULTIPROCESS = 100  # Skip multiprocessing overhead for small datasets
 
 class DocumentIndexer:
     def __init__(self, persist_directory: str = "./data/faiss_db"):
@@ -21,6 +31,15 @@ class DocumentIndexer:
         print("Loading embedding model...")
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
         self.dimension = 384  # all-MiniLM-L6-v2 dimension
+
+        # Detect optimal device and configure for performance
+        self.device = self._detect_device()
+        if self.device != "cpu":
+            self.model.to(self.device)
+
+        # Configure batch size based on device
+        self.batch_size = DEFAULT_BATCH_SIZE if self.device.startswith('cuda') else CPU_BATCH_SIZE
+        self.use_multiprocess = self.device == "cpu"
 
         # Load or create FAISS index
         if self.index_file.exists():
@@ -75,7 +94,110 @@ class DocumentIndexer:
             pickle.dump(self.texts, f)
         with open(self.file_hashes_file, 'wb') as f:
             pickle.dump(self.file_hashes, f)
-    
+
+    def _detect_device(self) -> str:
+        """Detect the optimal device for embedding computation."""
+        if torch.cuda.is_available():
+            device = "cuda:0"
+            print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+            return device
+        else:
+            print("No GPU available, using CPU with multiprocessing")
+            return "cpu"
+
+    def _encode_in_batches(
+        self,
+        texts: List[str],
+        progress_callback: Optional[Callable] = None
+    ) -> np.ndarray:
+        """
+        Encode texts in batches with progress reporting.
+
+        Uses GPU if available, otherwise falls back to multiprocessing on CPU.
+        """
+        total_texts = len(texts)
+
+        # Use multiprocessing for large datasets on CPU
+        if self.use_multiprocess and total_texts >= MIN_CHUNKS_FOR_MULTIPROCESS:
+            return self._encode_multiprocess(texts, progress_callback)
+
+        # Single-process batched encoding (GPU or small CPU workloads)
+        all_embeddings = []
+        processed = 0
+
+        for i in range(0, total_texts, self.batch_size):
+            batch = texts[i:i + self.batch_size]
+
+            batch_embeddings = self.model.encode(
+                batch,
+                batch_size=self.batch_size,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                device=self.device
+            )
+
+            all_embeddings.append(batch_embeddings)
+            processed += len(batch)
+
+            if progress_callback:
+                progress_callback({
+                    "type": "embedding_progress",
+                    "data": {
+                        "processed": processed,
+                        "total": total_texts,
+                        "percent": int((processed / total_texts) * 100)
+                    }
+                })
+
+        return np.vstack(all_embeddings)
+
+    def _encode_multiprocess(
+        self,
+        texts: List[str],
+        progress_callback: Optional[Callable] = None
+    ) -> np.ndarray:
+        """
+        Encode texts using multiple CPU processes.
+
+        Uses sentence-transformers built-in multiprocessing support for
+        significant speedup on CPU-only systems.
+        """
+        import multiprocessing
+
+        # Determine number of workers (leave one core for main process)
+        num_workers = min(MAX_CPU_WORKERS, max(1, multiprocessing.cpu_count() - 1))
+
+        if progress_callback:
+            progress_callback({
+                "type": "embedding_info",
+                "data": {"message": f"Using {num_workers} CPU workers for parallel encoding"}
+            })
+
+        # Create pool and encode
+        pool = self.model.start_multi_process_pool(target_devices=["cpu"] * num_workers)
+
+        try:
+            embeddings = self.model.encode_multi_process(
+                texts,
+                pool,
+                batch_size=self.batch_size
+            )
+
+            if progress_callback:
+                progress_callback({
+                    "type": "embedding_progress",
+                    "data": {
+                        "processed": len(texts),
+                        "total": len(texts),
+                        "percent": 100
+                    }
+                })
+
+            return embeddings
+
+        finally:
+            self.model.stop_multi_process_pool(pool)
+
     def index_directory(self, directory: str, progress_callback: Optional[Callable] = None) -> Dict[str, int]:
         docs_path = Path(directory)
         documents = []
@@ -170,11 +292,18 @@ class DocumentIndexer:
         if documents:
             print(f"\nGenerating embeddings for {len(documents)} chunks...")
             if progress_callback:
-                progress_callback({"type": "embedding_start", "data": {"total_chunks": len(documents)}})
+                progress_callback({
+                    "type": "embedding_start",
+                    "data": {
+                        "total_chunks": len(documents),
+                        "device": self.device,
+                        "batch_size": self.batch_size
+                    }
+                })
 
-            # Generate embeddings for new chunks
+            # Generate embeddings using optimized batched encoding
             texts = [d["text"] for d in documents]
-            embeddings = self.model.encode(texts, show_progress_bar=True)
+            embeddings = self._encode_in_batches(texts, progress_callback)
 
             if progress_callback:
                 progress_callback({"type": "embedding_complete", "data": {"total_chunks": len(documents)}})
