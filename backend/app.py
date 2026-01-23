@@ -96,6 +96,9 @@ async def websocket_index(websocket: WebSocket):
         # Run in executor to avoid blocking
         stats = await asyncio.to_thread(run_indexing)
 
+        # Reload the retriever so it picks up the new index
+        retriever.reload()
+
         # Send completion signal
         await websocket.send_text(json.dumps({
             "type": "done",

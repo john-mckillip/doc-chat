@@ -21,13 +21,33 @@ import shutil
 class MockSentenceTransformer:
     """Mock SentenceTransformer class."""
     def __init__(self, *args, **kwargs):
-        pass
+        self._device = "cpu"
 
-    def encode(self, texts, show_progress_bar=False, convert_to_numpy=True):
+    def encode(self, texts, show_progress_bar=False, convert_to_numpy=True,
+               batch_size=32, device=None):
         """Return fixed embeddings (384 dimensions)."""
         if isinstance(texts, str):
             texts = [texts]
         return np.random.rand(len(texts), 384).astype('float32')
+
+    def to(self, device):
+        """Mock device placement."""
+        self._device = device
+        return self
+
+    def start_multi_process_pool(self, target_devices=None):
+        """Mock multiprocess pool - returns dummy pool object."""
+        return {"input": None, "output": None, "processes": []}
+
+    def encode_multi_process(self, texts, pool, batch_size=32, chunk_size=None):
+        """Mock multiprocess encoding - returns same as regular encode."""
+        if isinstance(texts, str):
+            texts = [texts]
+        return np.random.rand(len(texts), 384).astype('float32')
+
+    def stop_multi_process_pool(self, pool):
+        """Mock stopping pool - no-op."""
+        pass
 
 
 # Mock faiss module
