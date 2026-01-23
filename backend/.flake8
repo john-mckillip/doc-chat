@@ -1,0 +1,27 @@
+[flake8]
+# Exclude directories that shouldn't be linted
+exclude =
+    venv,
+    .venv,
+    env,
+    ENV,
+    __pycache__,
+    .pytest_cache,
+    htmlcov,
+    data,
+    *.egg-info,
+    build,
+    dist,
+    .git,
+    .tox
+
+# Maximum line length
+max-line-length = 100
+
+# Ignore specific error codes
+# E203: whitespace before ':'
+# W503: line break before binary operator
+ignore = E203,W503
+
+# Maximum complexity
+max-complexity = 10

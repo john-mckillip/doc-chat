@@ -8,8 +8,9 @@ import os
 import json
 from pathlib import Path
 
+
 class DocumentRetriever:
-    def __init__(self, persist_directory: str = "./data/faiss_db"):
+    def __init__(self, persist_directory: str = os.getenv("FAISS_PERSIST_DIR", "./data/faiss_db")):
         self.persist_directory = Path(persist_directory)
         self.index_file = self.persist_directory / "index.faiss"
         self.metadata_file = self.persist_directory / "metadata.pkl"
@@ -38,13 +39,18 @@ class DocumentRetriever:
 
         # Load embedding model
         print("Loading embedding model...")
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.model = SentenceTransformer(
+            os.getenv(
+                "SENTENCE_TRANSFORMER_MODEL",
+                "all-MiniLM-L6-v2"
+            )
+        )
 
         # Initialize Anthropic client
         self.anthropic_client = anthropic.Anthropic(
             api_key=os.getenv("ANTHROPIC_API_KEY")
         )
-    
+
     def search(self, query: str, top_k: int = 5) -> List[Dict]:
         """Search for relevant documents"""
         if self.index is None:
@@ -78,23 +84,23 @@ class DocumentRetriever:
                     break
 
         return sources
-    
+
     async def ask_streaming(
-        self, 
-        query: str, 
+        self,
+        query: str,
         conversation_history: List[Dict] = None
     ) -> AsyncGenerator[str, None]:
         """Ask question with streaming response"""
-        
+
         # Retrieve relevant context
         sources = self.search(query, top_k=5)
-        
+
         # Build context from sources
         context = "\n\n".join([
             f"Source: {s['metadata']['file_name']}\n{s['text']}"
             for s in sources
         ])
-        
+
         # Build messages
         messages = conversation_history or []
         messages.append({
@@ -108,7 +114,7 @@ Question: {query}
 
 Please cite which files you're referencing in your answer."""
         })
-        
+
         # First yield the sources
         yield json.dumps({
             "type": "sources",
@@ -125,7 +131,7 @@ Please cite which files you're referencing in your answer."""
         # Stream the response
         with self.anthropic_client.messages.stream(
             model="claude-sonnet-4-20250514",
-            max_tokens=8192,
+            max_tokens=int(os.getenv("MAX_TOKENS", "16384")),
             messages=messages
         ) as stream:
             for text in stream.text_stream:

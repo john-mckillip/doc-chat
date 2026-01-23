@@ -4,7 +4,6 @@ Tests for DocumentIndexer class and indexing functionality.
 import pytest
 from pathlib import Path
 import hashlib
-from unittest.mock import Mock, patch, call
 
 
 class TestDocumentIndexerInit:
@@ -247,6 +246,7 @@ class TestDirectoryIndexing:
         stats = indexer.index_directory(str(sample_docs), progress_callback=progress_callback)
 
         # Should receive various progress messages
+        assert stats["files"] > 0
         message_types = [msg["type"] for msg in messages]
         assert "scan_start" in message_types
         assert "file_processing" in message_types or "file_skipped" in message_types
@@ -342,6 +342,11 @@ class TestDirectoryIndexing:
         error_messages = [msg for msg in messages if msg["type"] == "error"]
         assert len(error_messages) >= 1
 
+        # Assert stats - the good file should be indexed, bad file should error
+        assert stats["files"] == 1  # Only good.md should be successfully indexed
+        assert stats["chunks"] > 0  # Should have some chunks from good.md
+        assert stats["new"] == 1    # Good file is new
+
 
 class TestGetStats:
     """Test statistics retrieval."""
@@ -373,3 +378,298 @@ class TestGetStats:
 
         assert stats["total_chunks"] == 0
         assert stats["dimension"] == 384
+
+
+class TestGetIndexedFiles:
+    """Test indexed files retrieval."""
+
+    def test_get_indexed_files_with_data(self, temp_dir):
+        """Test get_indexed_files returns file information correctly."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        indexer.metadata = [
+            {
+                "file_path": "/test/doc1.md",
+                "file_name": "doc1.md",
+                "extension": ".md",
+                "hash": "abc123",
+                "deleted": False
+            },
+            {
+                "file_path": "/test/doc1.md",
+                "file_name": "doc1.md",
+                "extension": ".md",
+                "hash": "abc123",
+                "deleted": False
+            },
+            {
+                "file_path": "/test/doc2.py",
+                "file_name": "doc2.py",
+                "extension": ".py",
+                "hash": "def456",
+                "deleted": False
+            },
+            {
+                "file_path": "/test/doc3.md",
+                "file_name": "doc3.md",
+                "extension": ".md",
+                "hash": "ghi789",
+                "deleted": True  # Should be excluded
+            },
+        ]
+
+        result = indexer.get_indexed_files()
+
+        assert result["total_files"] == 2
+        assert len(result["files"]) == 2
+
+        # Find doc1.md in results
+        doc1 = next(f for f in result["files"] if f["file_name"] == "doc1.md")
+        assert doc1["file_path"] == "/test/doc1.md"
+        assert doc1["extension"] == ".md"
+        assert doc1["chunk_count"] == 2
+        assert doc1["hash"] == "abc123"
+
+        # Find doc2.py in results
+        doc2 = next(f for f in result["files"] if f["file_name"] == "doc2.py")
+        assert doc2["chunk_count"] == 1
+
+        # doc3.md should not be in results (deleted)
+        doc3_list = [f for f in result["files"] if f["file_name"] == "doc3.md"]
+        assert len(doc3_list) == 0
+
+    def test_get_indexed_files_empty_index(self, temp_dir):
+        """Test get_indexed_files with empty index."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        result = indexer.get_indexed_files()
+
+        assert result["total_files"] == 0
+        assert result["files"] == []
+
+
+class TestHelperMethods:
+    """Test the helper methods."""
+
+    def test_get_file_status_new_file(self, temp_dir):
+        """Test _get_file_status with a new file."""
+        from indexer import DocumentIndexer
+        from pathlib import Path
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        test_file = Path("/test/new_file.md")
+        file_hash = "abc123"
+
+        status, should_skip = indexer._get_file_status(test_file, file_hash)
+
+        assert status == "new"
+        assert should_skip is False
+
+    def test_get_file_status_modified_file(self, temp_dir):
+        """Test _get_file_status with a modified file."""
+        from indexer import DocumentIndexer
+        from pathlib import Path
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        test_file = Path("/test/modified_file.md")
+
+        # Set up existing hash
+        indexer.file_hashes[str(test_file)] = "old_hash"
+        indexer.metadata = [
+            {"file_path": str(test_file), "deleted": False}
+        ]
+
+        status, should_skip = indexer._get_file_status(
+            test_file,
+            "new_hash"
+        )
+
+        assert status == "modified"
+        assert should_skip is False
+        # Verify chunks were marked deleted
+        assert indexer.metadata[0]["deleted"] is True
+
+    def test_get_file_status_unchanged_file(self, temp_dir):
+        """Test _get_file_status with an unchanged file."""
+        from indexer import DocumentIndexer
+        from pathlib import Path
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        test_file = Path("/test/unchanged_file.md")
+        file_hash = "same_hash"
+
+        # Set up existing hash
+        indexer.file_hashes[str(test_file)] = file_hash
+
+        status, should_skip = indexer._get_file_status(test_file, file_hash)
+
+        assert status == "unchanged"
+        assert should_skip is True
+
+    def test_process_single_file(self, temp_dir):
+        """Test _process_single_file creates documents correctly."""
+        from indexer import DocumentIndexer
+        from pathlib import Path
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        test_file = Path("/test/sample.md")
+        content = "# Test\n\nThis is test content."
+        file_hash = "test_hash"
+
+        documents = indexer._process_single_file(
+            test_file,
+            content,
+            file_hash,
+            "new"
+        )
+
+        assert len(documents) > 0
+        assert all("text" in doc for doc in documents)
+        assert all("metadata" in doc for doc in documents)
+        assert documents[0]["metadata"]["file_path"] == str(test_file)
+        assert documents[0]["metadata"]["hash"] == file_hash
+        assert indexer.file_hashes[str(test_file)] == file_hash
+
+    def test_process_single_file_with_callback(self, temp_dir):
+        """Test _process_single_file calls progress callback."""
+        from indexer import DocumentIndexer
+        from pathlib import Path
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        test_file = Path("/test/sample.md")
+        content = "# Test Content"
+        file_hash = "test_hash"
+
+        messages = []
+
+        def callback(msg):
+            messages.append(msg)
+
+        indexer._process_single_file(
+            test_file,
+            content,
+            file_hash,
+            "new",
+            callback
+        )
+
+        message_types = [msg["type"] for msg in messages]
+        assert "file_processing" in message_types
+        assert "file_processed" in message_types
+
+    def test_process_deleted_files(self, temp_dir):
+        """Test _process_deleted_files marks chunks and returns count."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        # Set up some tracked files
+        indexer.file_hashes = {
+            "/test/file1.md": "hash1",
+            "/test/file2.md": "hash2",
+            "/test/file3.md": "hash3",
+        }
+        indexer.metadata = [
+            {"file_path": "/test/file1.md", "deleted": False},
+            {"file_path": "/test/file2.md", "deleted": False},
+            {"file_path": "/test/file3.md", "deleted": False},
+        ]
+
+        # Only file1 still exists
+        current_files = {"/test/file1.md"}
+
+        deleted_count = indexer._process_deleted_files(current_files)
+
+        assert deleted_count == 2
+        assert "/test/file1.md" in indexer.file_hashes
+        assert "/test/file2.md" not in indexer.file_hashes
+        assert "/test/file3.md" not in indexer.file_hashes
+        assert indexer.metadata[0]["deleted"] is False
+        assert indexer.metadata[1]["deleted"] is True
+        assert indexer.metadata[2]["deleted"] is True
+
+    def test_process_deleted_files_with_callback(self, temp_dir):
+        """Test _process_deleted_files calls progress callback."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        indexer.file_hashes = {"/test/deleted.md": "hash"}
+        indexer.metadata = [
+            {"file_path": "/test/deleted.md", "deleted": False}
+        ]
+
+        messages = []
+
+        def callback(msg):
+            messages.append(msg)
+
+        indexer._process_deleted_files(set(), callback)
+
+        message_types = [msg["type"] for msg in messages]
+        assert "file_deleted" in message_types
+
+    def test_add_documents_to_index(self, temp_dir, mocker):
+        """Test _add_documents_to_index adds documents to FAISS."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        documents = [
+            {
+                "text": "Test chunk 1",
+                "metadata": {"file_path": "/test.md", "chunk_index": 0}
+            },
+            {
+                "text": "Test chunk 2",
+                "metadata": {"file_path": "/test.md", "chunk_index": 1}
+            }
+        ]
+
+        initial_count = indexer.index.ntotal
+
+        indexer._add_documents_to_index(documents)
+
+        assert len(indexer.metadata) == 2
+        assert len(indexer.texts) == 2
+        assert indexer.index.ntotal == initial_count + 2
+
+    def test_add_documents_to_index_empty_list(self, temp_dir):
+        """Test _add_documents_to_index handles empty list."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        initial_count = indexer.index.ntotal
+
+        indexer._add_documents_to_index([])
+
+        # Should not add anything
+        assert indexer.index.ntotal == initial_count
+
+    def test_add_documents_to_index_with_callback(self, temp_dir):
+        """Test _add_documents_to_index calls progress callbacks."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        documents = [
+            {
+                "text": "Test chunk",
+                "metadata": {"file_path": "/test.md", "chunk_index": 0}
+            }
+        ]
+
+        messages = []
+
+        def callback(msg):
+            messages.append(msg)
+
+        indexer._add_documents_to_index(documents, callback)
+
+        message_types = [msg["type"] for msg in messages]
+        assert "embedding_start" in message_types
+        assert "embedding_complete" in message_types
+        assert "saving" in message_types
+        assert "save_complete" in message_types
