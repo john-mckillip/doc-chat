@@ -481,7 +481,13 @@ class DocumentIndexer:
 
                 if should_skip:
                     # Skip unchanged files
-                    self.handle_skip_progress_callback()
+                    if progress_callback:
+                        progress_callback(
+                            {
+                                "type": "file_skipped",
+                                "data": {"file": filepath.name, "status": "unchanged"},
+                            }
+                        )
                     continue
 
                 # Process file and collect documents
@@ -505,19 +511,6 @@ class DocumentIndexer:
                     )
 
         return documents
-
-    def handle_skip_progress_callback(self):
-        if self.should_skip:
-            # The code snippet is checking if the `self.progress_callback` attribute is truthy
-            # (i.e., not `None` or `False`). If it is truthy, then the code inside the `if`
-            # block will be executed.
-            if self.progress_callback:
-                self.progress_callback(
-                    {
-                        "type": "file_skipped",
-                        "data": {"file": self.filepath.name, "status": "unchanged"},
-                    }
-                )
 
     def _finalize_indexing(
         self,

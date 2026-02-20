@@ -11,6 +11,7 @@ from config import get_backend_settings
 
 # Load environment variables
 load_dotenv()
+settings = get_backend_settings()
 
 
 def _is_ready(app: FastAPI) -> bool:
@@ -32,17 +33,15 @@ def _require_services(app: FastAPI) -> tuple[DocumentIndexer, DocumentRetriever]
 async def _try_send_fatal_error(websocket: WebSocket, message: str) -> None:
     """Attempt to send a fatal_error message to the client; log if that also fails."""
     try:
-        await websocket.send_text(json.dumps({
-            "type": "fatal_error",
-            "data": {"message": message}
-        }))
+        await websocket.send_text(
+            json.dumps({"type": "fatal_error", "data": {"message": message}})
+        )
     except Exception as send_exc:
         print(f"Failed to send error to client: {send_exc}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_backend_settings()
     app.state.settings = settings
     app.state.indexer = None
     app.state.retriever = None
@@ -60,8 +59,8 @@ async def lifespan(app: FastAPI):
     app.state.indexer = None
     app.state.retriever = None
 
+
 app = FastAPI(lifespan=lifespan)
-settings = get_backend_settings()
 
 # CORS for React dev server
 app.add_middleware(
@@ -136,10 +135,9 @@ async def websocket_index(websocket: WebSocket):
     try:
         indexer, retriever = _require_services(websocket.app)
     except RuntimeError as exc:
-        await websocket.send_text(json.dumps({
-            "type": "fatal_error",
-            "data": {"message": str(exc)}
-        }))
+        await websocket.send_text(
+            json.dumps({"type": "fatal_error", "data": {"message": str(exc)}})
+        )
         await websocket.close()
         return
 
@@ -149,19 +147,21 @@ async def websocket_index(websocket: WebSocket):
         try:
             request_data = json.loads(data)
         except json.JSONDecodeError:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "data": {"message": "Invalid JSON in request"}
-            }))
+            await websocket.send_text(
+                json.dumps(
+                    {"type": "error", "data": {"message": "Invalid JSON in request"}}
+                )
+            )
             await websocket.close()
             return
         directory = request_data.get("directory")
 
         if not directory:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "data": {"message": "No directory provided"}
-            }))
+            await websocket.send_text(
+                json.dumps(
+                    {"type": "error", "data": {"message": "No directory provided"}}
+                )
+            )
             await websocket.close()
             return
 
@@ -190,10 +190,9 @@ async def websocket_index(websocket: WebSocket):
         retriever.reload()
 
         # Send completion signal
-        await websocket.send_text(json.dumps({
-            "type": "done",
-            "data": {"stats": stats}
-        }))
+        await websocket.send_text(
+            json.dumps({"type": "done", "data": {"stats": stats}})
+        )
 
     except WebSocketDisconnect:
         print("Client disconnected from indexing")
@@ -212,10 +211,9 @@ async def websocket_chat(websocket: WebSocket):
     try:
         _, retriever = _require_services(websocket.app)
     except RuntimeError as exc:
-        await websocket.send_text(json.dumps({
-            "type": "fatal_error",
-            "data": {"message": str(exc)}
-        }))
+        await websocket.send_text(
+            json.dumps({"type": "fatal_error", "data": {"message": str(exc)}})
+        )
         await websocket.close()
         return
 
@@ -226,10 +224,14 @@ async def websocket_chat(websocket: WebSocket):
             try:
                 message_data = json.loads(data)
             except json.JSONDecodeError:
-                await websocket.send_text(json.dumps({
-                    "type": "error",
-                    "data": {"message": "Invalid JSON in request"}
-                }))
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "data": {"message": "Invalid JSON in request"},
+                        }
+                    )
+                )
                 continue
 
             query = message_data.get("query")
@@ -237,14 +239,13 @@ async def websocket_chat(websocket: WebSocket):
                 continue
 
             # Add user message to history
-            conversation_history.append({
-                "role": "user",
-                "content": query
-            })
+            conversation_history.append({"role": "user", "content": query})
 
             # Stream response
             assistant_message = ""
-            async for chunk in retriever.ask_streaming(query, conversation_history[:-1]):
+            async for chunk in retriever.ask_streaming(
+                query, conversation_history[:-1]
+            ):
                 await websocket.send_text(chunk)
 
                 # Collect assistant message for history
@@ -254,15 +255,12 @@ async def websocket_chat(websocket: WebSocket):
 
             # Add complete assistant message to history
             if assistant_message:
-                conversation_history.append({
-                    "role": "assistant",
-                    "content": assistant_message
-                })
+                conversation_history.append(
+                    {"role": "assistant", "content": assistant_message}
+                )
 
             # Send completion signal
-            await websocket.send_text(json.dumps({
-                "type": "done"
-            }) + "\n")
+            await websocket.send_text(json.dumps({"type": "done"}) + "\n")
 
     except WebSocketDisconnect:
         print("Client disconnected")
@@ -271,6 +269,8 @@ async def websocket_chat(websocket: WebSocket):
         await _try_send_fatal_error(websocket, str(e))
         await websocket.close()
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
