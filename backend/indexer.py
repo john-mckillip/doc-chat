@@ -368,7 +368,9 @@ class DocumentIndexer:
         """
         deleted_count = 0
 
-        for filepath_str in self.file_hashes.keys():
+        # list() snapshots the keys so that deleting inside the loop does not
+        # mutate the view being iterated (which would raise RuntimeError).
+        for filepath_str in list(self.file_hashes.keys()):
             if filepath_str not in current_files:
                 self._mark_file_chunks_deleted(Path(filepath_str))
                 del self.file_hashes[filepath_str]
@@ -568,6 +570,12 @@ class DocumentIndexer:
             Dictionary with indexing statistics
         """
         docs_path = Path(directory)
+
+        if not docs_path.exists():
+            raise ValueError(f"Directory does not exist: {directory}")
+        if not docs_path.is_dir():
+            raise ValueError(f"Path is not a directory: {directory}")
+
         stats = {
             "files": 0,
             "chunks": 0,

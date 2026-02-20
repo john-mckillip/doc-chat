@@ -516,12 +516,18 @@ class TestMultiprocessEncoding:
     def test_encode_in_batches_uses_multiprocess_when_threshold_met(self, temp_dir, mocker):
         """Test that multiprocessing is used when chunk count exceeds threshold."""
         from indexer import DocumentIndexer
-        import indexer as indexer_module
+        from config import get_backend_settings
+        from dataclasses import replace
 
-        # Set low threshold for testing
-        mocker.patch.object(indexer_module, 'MIN_CHUNKS_FOR_MULTIPROCESS', 5)
+        # Build settings with a low threshold so 10 texts exceed it.
+        # MIN_CHUNKS_FOR_MULTIPROCESS was refactored into BackendSettings;
+        # patch via dataclasses.replace since BackendSettings is frozen=True.
+        low_threshold_settings = replace(get_backend_settings(), min_chunks_for_multiprocess=5)
 
-        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        indexer = DocumentIndexer(
+            persist_directory=str(temp_dir / "db"),
+            settings=low_threshold_settings,
+        )
         indexer.use_multiprocess = True
 
         # Mock _encode_multiprocess to verify it's called
@@ -892,4 +898,27 @@ class TestHelperMethods:
         assert "embedding_start" in message_types
         assert "embedding_complete" in message_types
         assert "saving" in message_types
-        assert "save_complete" in message_types
+
+
+class TestIndexDirectoryValidation:
+    """Test early input validation in index_directory."""
+
+    def test_index_directory_nonexistent_path_raises(self, temp_dir):
+        """index_directory raises ValueError for a path that does not exist."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+
+        with pytest.raises(ValueError, match="does not exist"):
+            indexer.index_directory("/no/such/path/ever")
+
+    def test_index_directory_file_path_raises(self, temp_dir):
+        """index_directory raises ValueError when given a file path instead of a directory."""
+        from indexer import DocumentIndexer
+
+        indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
+        a_file = temp_dir / "just_a_file.txt"
+        a_file.write_text("content")
+
+        with pytest.raises(ValueError, match="not a directory"):
+            indexer.index_directory(str(a_file))

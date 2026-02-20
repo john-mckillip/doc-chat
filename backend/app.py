@@ -29,6 +29,17 @@ def _require_services(app: FastAPI) -> tuple[DocumentIndexer, DocumentRetriever]
     return app.state.indexer, app.state.retriever
 
 
+async def _try_send_fatal_error(websocket: WebSocket, message: str) -> None:
+    """Attempt to send a fatal_error message to the client; log if that also fails."""
+    try:
+        await websocket.send_text(json.dumps({
+            "type": "fatal_error",
+            "data": {"message": message}
+        }))
+    except Exception as send_exc:
+        print(f"Failed to send error to client: {send_exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_backend_settings()
@@ -135,7 +146,15 @@ async def websocket_index(websocket: WebSocket):
     try:
         # Receive indexing request
         data = await websocket.receive_text()
-        request_data = json.loads(data)
+        try:
+            request_data = json.loads(data)
+        except json.JSONDecodeError:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "data": {"message": "Invalid JSON in request"}
+            }))
+            await websocket.close()
+            return
         directory = request_data.get("directory")
 
         if not directory:
@@ -179,15 +198,8 @@ async def websocket_index(websocket: WebSocket):
     except WebSocketDisconnect:
         print("Client disconnected from indexing")
     except Exception as e:
-        error_msg = f"Indexing error: {e}"
-        print(error_msg)
-        try:
-            await websocket.send_text(json.dumps({
-                "type": "fatal_error",
-                "data": {"message": str(e)}
-            }))
-        except Exception:
-            pass
+        print(f"Indexing error: {e}")
+        await _try_send_fatal_error(websocket, str(e))
         await websocket.close()
 
 
@@ -211,7 +223,14 @@ async def websocket_chat(websocket: WebSocket):
         while True:
             # Receive message from client
             data = await websocket.receive_text()
-            message_data = json.loads(data)
+            try:
+                message_data = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "data": {"message": "Invalid JSON in request"}
+                }))
+                continue
 
             query = message_data.get("query")
             if not query:
@@ -249,6 +268,7 @@ async def websocket_chat(websocket: WebSocket):
         print("Client disconnected")
     except Exception as e:
         print(f"WebSocket error: {e}")
+        await _try_send_fatal_error(websocket, str(e))
         await websocket.close()
 
 if __name__ == "__main__":

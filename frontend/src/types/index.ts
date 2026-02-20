@@ -11,7 +11,7 @@ export interface Source {
 }
 
 export interface WebSocketMessage {
-    type: 'sources' | 'content' | 'done';
+    type: 'sources' | 'content' | 'done' | 'error' | 'fatal_error' | 'truncated';
     data?: Source[] | string | Record<string, unknown>;
 }
 
@@ -20,6 +20,7 @@ export interface UseWebSocketReturn {
     sendMessage: (query: string) => void;
     isConnected: boolean;
     isStreaming: boolean;
+    error: string | null;
 }
 
 export interface AppStats {

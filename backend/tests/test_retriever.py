@@ -40,6 +40,61 @@ class TestDocumentRetrieverInit:
         assert retriever.metadata == []
         assert retriever.texts == []
 
+    def test_load_index_missing_metadata_file_resets_to_empty(
+        self, temp_dir, mock_ollama_client
+    ):
+        """index.faiss present but metadata.pkl absent → safe empty reset, no crash."""
+        from retriever import DocumentRetriever
+
+        persist_dir = temp_dir / "db"
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        (persist_dir / "index.faiss").touch()
+        # metadata.pkl and texts.pkl deliberately absent
+
+        retriever = DocumentRetriever(persist_directory=str(persist_dir))
+
+        assert retriever.index is None
+        assert retriever.metadata == []
+        assert retriever.texts == []
+
+    def test_load_index_missing_texts_file_resets_to_empty(
+        self, temp_dir, mock_ollama_client
+    ):
+        """index.faiss + metadata.pkl present but texts.pkl absent → safe empty reset."""
+        import pickle
+        from retriever import DocumentRetriever
+
+        persist_dir = temp_dir / "db"
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        (persist_dir / "index.faiss").touch()
+        with open(persist_dir / "metadata.pkl", "wb") as f:
+            pickle.dump([{"file": "test.md"}], f)
+        # texts.pkl deliberately absent
+
+        retriever = DocumentRetriever(persist_directory=str(persist_dir))
+
+        assert retriever.index is None
+        assert retriever.metadata == []
+        assert retriever.texts == []
+
+    def test_load_index_corrupt_pickle_resets_to_empty(
+        self, temp_dir, mock_ollama_client
+    ):
+        """Corrupt pickle files → safe empty reset rather than UnpicklingError crash."""
+        from retriever import DocumentRetriever
+
+        persist_dir = temp_dir / "db"
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        (persist_dir / "index.faiss").touch()
+        (persist_dir / "metadata.pkl").write_bytes(b"not valid pickle data!!!")
+        (persist_dir / "texts.pkl").write_bytes(b"also garbage")
+
+        retriever = DocumentRetriever(persist_directory=str(persist_dir))
+
+        assert retriever.index is None
+        assert retriever.metadata == []
+        assert retriever.texts == []
+
 
 class TestSearch:
     """Test vector similarity search."""
@@ -105,6 +160,40 @@ class TestSearch:
 
         results = retriever.search("test query")
 
+        assert results == []
+
+    def test_search_short_circuits_before_faiss_when_ntotal_zero(
+        self, temp_dir, mock_ollama_client, mocker
+    ):
+        """FAISS search must NOT be called when the index is empty (ntotal==0).
+
+        Passing k=0 to FAISS is undefined behaviour in some builds; the guard
+        must short-circuit before that call.
+        """
+        from retriever import DocumentRetriever
+
+        retriever = DocumentRetriever(persist_directory=str(temp_dir / "db"))
+        retriever.index = mocker.MagicMock()
+        retriever.index.ntotal = 0
+
+        results = retriever.search("test query", top_k=5)
+
+        retriever.index.search.assert_not_called()
+        assert results == []
+
+    def test_search_short_circuits_before_faiss_when_top_k_zero(
+        self, temp_dir, mock_ollama_client, mocker
+    ):
+        """FAISS search must NOT be called when top_k <= 0."""
+        from retriever import DocumentRetriever
+
+        retriever = DocumentRetriever(persist_directory=str(temp_dir / "db"))
+        retriever.index = mocker.MagicMock()
+        retriever.index.ntotal = 10  # non-empty — guard must be top_k, not ntotal
+
+        results = retriever.search("test query", top_k=0)
+
+        retriever.index.search.assert_not_called()
         assert results == []
 
 
@@ -196,6 +285,31 @@ class TestAskStreaming:
             chunks.append(chunk)
 
         # Should still complete (backend doesn't validate empty queries)
+
+    @pytest.mark.asyncio
+    async def test_ask_streaming_yields_error_on_ollama_failure(
+        self, retriever_with_index
+    ):
+        """When Ollama raises an exception the generator must yield an error JSON
+        message rather than propagating the exception to the caller."""
+        from unittest.mock import AsyncMock
+
+        retriever_with_index.ollama_client.chat = AsyncMock(
+            side_effect=Exception("network error")
+        )
+        # Ensure the index has entries so search() runs (ntotal is 0 from mock by
+        # default; set it so the guard doesn't short-circuit before Ollama is called).
+        retriever_with_index.index.ntotal = 2
+
+        chunks = []
+        async for chunk in retriever_with_index.ask_streaming("test query"):
+            chunks.append(chunk)
+
+        messages = [json.loads(c.strip()) for c in chunks if c.strip()]
+        error_messages = [msg for msg in messages if msg["type"] == "error"]
+
+        assert len(error_messages) >= 1
+        assert "network error" in error_messages[0]["data"]["message"]
 
     @pytest.mark.asyncio
     async def test_ask_streaming_with_no_sources(self, temp_dir, mock_ollama_client):

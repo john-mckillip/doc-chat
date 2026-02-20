@@ -5,6 +5,7 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
 
@@ -18,7 +19,13 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
     };
 
     ws.onmessage = (event) => {
-      const data: WebSocketMessage = JSON.parse(event.data);
+      let data: WebSocketMessage;
+      try {
+        data = JSON.parse(event.data);
+      } catch (err) {
+        console.error('Failed to parse WebSocket message:', err);
+        return;
+      }
 
       switch (data.type) {
         case 'sources':
@@ -36,21 +43,33 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
             setMessages(prev => {
               const newMessages = [...prev];
               const lastMessage = newMessages[newMessages.length - 1];
-              
+
               if (lastMessage?.role === 'assistant' && currentMessageRef.current) {
                 newMessages[newMessages.length - 1] = { ...currentMessageRef.current };
               } else if (currentMessageRef.current) {
                 newMessages.push({ ...currentMessageRef.current });
               }
-              
+
               return newMessages;
             });
           }
           break;
 
         case 'done':
+        case 'truncated':
           setIsStreaming(false);
           currentMessageRef.current = null;
+          break;
+
+        case 'error':
+          setError((data.data as Record<string, string>)?.message ?? 'An error occurred');
+          break;
+
+        case 'fatal_error':
+          setError((data.data as Record<string, string>)?.message ?? 'A fatal error occurred');
+          setIsStreaming(false);
+          currentMessageRef.current = null;
+          ws.close();
           break;
       }
     };
@@ -60,8 +79,8 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
       setIsConnected(false);
     };
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err);
     };
 
     return () => {
@@ -71,6 +90,7 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
 
   const sendMessage = useCallback((query: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN && !isStreaming) {
+      setError(null);
       const userMessage: Message = { role: 'user', content: query };
       setMessages(prev => [...prev, userMessage]);
 
@@ -78,5 +98,5 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
     }
   }, [isStreaming]);
 
-  return { messages, sendMessage, isConnected, isStreaming };
+  return { messages, sendMessage, isConnected, isStreaming, error };
 };

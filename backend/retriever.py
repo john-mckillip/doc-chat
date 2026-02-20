@@ -44,7 +44,25 @@ class DocumentRetriever:
 
     def _load_index(self):
         """Load the FAISS index and associated data from disk."""
-        if self.index_file.exists():
+        if not self.index_file.exists():
+            print("No index found - please index documents first")
+            self.index = None
+            self.metadata = []
+            self.texts = []
+            return
+
+        if not self.metadata_file.exists() or not self.texts_file.exists():
+            print(
+                f"Warning: index.faiss exists but companion files are missing "
+                f"(metadata={self.metadata_file.exists()}, texts={self.texts_file.exists()}). "
+                "Resetting to empty state — please re-index."
+            )
+            self.index = None
+            self.metadata = []
+            self.texts = []
+            return
+
+        try:
             print("Loading FAISS index...")
             self.index = faiss.read_index(str(self.index_file))
 
@@ -55,8 +73,11 @@ class DocumentRetriever:
                 self.texts = pickle.load(f)
 
             print(f"✓ Loaded {len(self.texts)} document chunks")
-        else:
-            print("No index found - please index documents first")
+        except Exception as exc:
+            print(
+                f"Warning: failed to load index from {self.persist_directory} ({exc}). "
+                "Resetting to empty state — please re-index."
+            )
             self.index = None
             self.metadata = []
             self.texts = []
@@ -68,7 +89,7 @@ class DocumentRetriever:
 
     def search(self, query: str, top_k: int = 5) -> List[Dict]:
         """Search for relevant documents"""
-        if self.index is None:
+        if self.index is None or self.index.ntotal == 0 or top_k <= 0:
             return []
 
         # Generate query embedding
@@ -154,18 +175,21 @@ class DocumentRetriever:
 
         # Stream the response
         num_predict = self.settings.max_tokens
-        stream = await self.ollama_client.chat(
-            model=self.settings.ollama_model,
-            messages=messages,
-            stream=True,
-            options={"num_predict": num_predict}
-        )
-        async for chunk in stream:
-            text = chunk.message.content
-            if text:
-                yield json.dumps({"type": "content", "data": text}) + "\n"
-            if chunk.done and chunk.done_reason == "length":
-                yield json.dumps({
-                    "type": "truncated",
-                    "data": {"reason": "max_tokens", "output_tokens": num_predict}
-                }) + "\n"
+        try:
+            stream = await self.ollama_client.chat(
+                model=self.settings.ollama_model,
+                messages=messages,
+                stream=True,
+                options={"num_predict": num_predict}
+            )
+            async for chunk in stream:
+                text = chunk.message.content
+                if text:
+                    yield json.dumps({"type": "content", "data": text}) + "\n"
+                if chunk.done and chunk.done_reason == "length":
+                    yield json.dumps({
+                        "type": "truncated",
+                        "data": {"reason": "max_tokens", "output_tokens": num_predict}
+                    }) + "\n"
+        except Exception as exc:
+            yield json.dumps({"type": "error", "data": {"message": f"LLM error: {exc}"}}) + "\n"
