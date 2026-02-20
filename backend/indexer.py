@@ -11,16 +11,36 @@ from config import BackendSettings, get_backend_settings
 
 # Directory and file exclusions for indexing
 EXCLUDED_DIRS = {
-    'node_modules', 'bin', 'obj', 'packages', 'dist', 'build',
-    '.git', '.vs', '.vscode', '.idea', 'wwwroot',
-    '__pycache__', '.pytest_cache', 'venv', 'env', '.env',
-    'coverage', '.coverage', 'htmlcov',
-    'TestResults', 'logs'
+    "node_modules",
+    "bin",
+    "obj",
+    "packages",
+    "dist",
+    "build",
+    ".git",
+    ".vs",
+    ".vscode",
+    ".idea",
+    "wwwroot",
+    "__pycache__",
+    ".pytest_cache",
+    "venv",
+    "env",
+    ".env",
+    "coverage",
+    ".coverage",
+    "htmlcov",
+    "TestResults",
+    "logs",
 }
 
 EXCLUDED_FILES = {
-    'package-lock.json', 'yarn.lock', 'packages.lock.json',
-    'pnpm-lock.yaml', '.DS_Store', 'Thumbs.db'
+    "package-lock.json",
+    "yarn.lock",
+    "packages.lock.json",
+    "pnpm-lock.yaml",
+    ".DS_Store",
+    "Thumbs.db",
 }
 
 
@@ -55,7 +75,7 @@ class DocumentIndexer:
         # Configure batch size based on device
         self.batch_size = (
             self.settings.embedding_batch_size
-            if self.device.startswith('cuda')
+            if self.device.startswith("cuda")
             else self.settings.embedding_cpu_batch_size
         )
         self.use_multiprocess = self.device == "cpu"
@@ -63,9 +83,9 @@ class DocumentIndexer:
         # Load or create FAISS index
         if self.index_file.exists():
             self.index = faiss.read_index(str(self.index_file))
-            with open(self.metadata_file, 'rb') as f:
+            with open(self.metadata_file, "rb") as f:
                 self.metadata = pickle.load(f)
-            with open(self.texts_file, 'rb') as f:
+            with open(self.texts_file, "rb") as f:
                 self.texts = pickle.load(f)
         else:
             self.index = faiss.IndexFlatL2(self.dimension)
@@ -74,7 +94,7 @@ class DocumentIndexer:
 
         # Load file hashes for incremental indexing
         if self.file_hashes_file.exists():
-            with open(self.file_hashes_file, 'rb') as f:
+            with open(self.file_hashes_file, "rb") as f:
                 self.file_hashes = pickle.load(f)
         else:
             self.file_hashes = {}
@@ -82,11 +102,11 @@ class DocumentIndexer:
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.settings.chunk_size,
             chunk_overlap=self.settings.chunk_overlap,
-            separators=["\n\n", "\n", ". ", " ", ""]
+            separators=["\n\n", "\n", ". ", " ", ""],
         )
 
     def _get_file_hash(self, filepath: Path) -> str:
-        with open(filepath, 'rb') as f:
+        with open(filepath, "rb") as f:
             return hashlib.md5(f.read()).hexdigest()
 
     def _should_index_file(self, filepath: Path) -> bool:
@@ -112,17 +132,19 @@ class DocumentIndexer:
         """Mark all chunks from a file as deleted"""
         filepath_str = str(filepath)
         for metadata in self.metadata:
-            if metadata.get('file_path') == filepath_str and not metadata.get('deleted', False):
-                metadata['deleted'] = True
+            if metadata.get("file_path") == filepath_str and not metadata.get(
+                "deleted", False
+            ):
+                metadata["deleted"] = True
 
     def _save(self):
         """Save index and metadata to disk"""
         faiss.write_index(self.index, str(self.index_file))
-        with open(self.metadata_file, 'wb') as f:
+        with open(self.metadata_file, "wb") as f:
             pickle.dump(self.metadata, f)
-        with open(self.texts_file, 'wb') as f:
+        with open(self.texts_file, "wb") as f:
             pickle.dump(self.texts, f)
-        with open(self.file_hashes_file, 'wb') as f:
+        with open(self.file_hashes_file, "wb") as f:
             pickle.dump(self.file_hashes, f)
 
     def _detect_device(self) -> str:
@@ -136,9 +158,7 @@ class DocumentIndexer:
             return "cpu"
 
     def _encode_in_batches(
-        self,
-        texts: List[str],
-        progress_callback: Optional[Callable] = None
+        self, texts: List[str], progress_callback: Optional[Callable] = None
     ) -> np.ndarray:
         """
         Encode texts in batches with progress reporting.
@@ -148,7 +168,10 @@ class DocumentIndexer:
         total_texts = len(texts)
 
         # Use multiprocessing for large datasets on CPU
-        if self.use_multiprocess and total_texts >= self.settings.min_chunks_for_multiprocess:
+        if (
+            self.use_multiprocess
+            and total_texts >= self.settings.min_chunks_for_multiprocess
+        ):
             return self._encode_multiprocess(texts, progress_callback)
 
         # Single-process batched encoding (GPU or small CPU workloads)
@@ -156,35 +179,35 @@ class DocumentIndexer:
         processed = 0
 
         for i in range(0, total_texts, self.batch_size):
-            batch = texts[i:i + self.batch_size]
+            batch = texts[i : i + self.batch_size]
 
             batch_embeddings = self.model.encode(
                 batch,
                 batch_size=self.batch_size,
                 show_progress_bar=False,
                 convert_to_numpy=True,
-                device=self.device
+                device=self.device,
             )
 
             all_embeddings.append(batch_embeddings)
             processed += len(batch)
 
             if progress_callback:
-                progress_callback({
-                    "type": "embedding_progress",
-                    "data": {
-                        "processed": processed,
-                        "total": total_texts,
-                        "percent": int((processed / total_texts) * 100)
+                progress_callback(
+                    {
+                        "type": "embedding_progress",
+                        "data": {
+                            "processed": processed,
+                            "total": total_texts,
+                            "percent": int((processed / total_texts) * 100),
+                        },
                     }
-                })
+                )
 
         return np.vstack(all_embeddings)
 
     def _encode_multiprocess(
-        self,
-        texts: List[str],
-        progress_callback: Optional[Callable] = None
+        self, texts: List[str], progress_callback: Optional[Callable] = None
     ) -> np.ndarray:
         """
         Encode texts using multiple CPU processes.
@@ -196,35 +219,38 @@ class DocumentIndexer:
 
         # Determine number of workers (leave one core for main process)
         num_workers = min(
-            self.settings.embedding_max_workers,
-            max(1, multiprocessing.cpu_count() - 1)
+            self.settings.embedding_max_workers, max(1, multiprocessing.cpu_count() - 1)
         )
 
         if progress_callback:
-            progress_callback({
-                "type": "embedding_info",
-                "data": {"message": f"Using {num_workers} CPU workers for parallel encoding"}
-            })
+            progress_callback(
+                {
+                    "type": "embedding_info",
+                    "data": {
+                        "message": f"Using {num_workers} CPU workers for parallel encoding"
+                    },
+                }
+            )
 
         # Create pool and encode
         pool = self.model.start_multi_process_pool(target_devices=["cpu"] * num_workers)
 
         try:
             embeddings = self.model.encode_multi_process(
-                texts,
-                pool,
-                batch_size=self.batch_size
+                texts, pool, batch_size=self.batch_size
             )
 
             if progress_callback:
-                progress_callback({
-                    "type": "embedding_progress",
-                    "data": {
-                        "processed": len(texts),
-                        "total": len(texts),
-                        "percent": 100
+                progress_callback(
+                    {
+                        "type": "embedding_progress",
+                        "data": {
+                            "processed": len(texts),
+                            "total": len(texts),
+                            "percent": 100,
+                        },
                     }
-                })
+                )
 
             return embeddings
 
@@ -260,7 +286,7 @@ class DocumentIndexer:
         content: str,
         file_hash: str,
         file_status: str,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
     ) -> list[Dict]:
         """
         Process a single file and create document chunks.
@@ -279,10 +305,12 @@ class DocumentIndexer:
 
         # Notify about file processing
         if progress_callback:
-            progress_callback({
-                "type": "file_processing",
-                "data": {"file": filepath.name, "status": file_status}
-            })
+            progress_callback(
+                {
+                    "type": "file_processing",
+                    "data": {"file": filepath.name, "status": file_status},
+                }
+            )
 
         # Split text into chunks
         chunks = self.text_splitter.split_text(content)
@@ -290,41 +318,43 @@ class DocumentIndexer:
         # Create documents
         documents = []
         for i, chunk in enumerate(chunks):
-            documents.append({
-                "text": chunk,
-                "metadata": {
-                    "file_path": filepath_str,
-                    "file_name": filepath.name,
-                    "chunk_index": i,
-                    "hash": file_hash,
-                    "extension": filepath.suffix,
-                    "deleted": False
+            documents.append(
+                {
+                    "text": chunk,
+                    "metadata": {
+                        "file_path": filepath_str,
+                        "file_name": filepath.name,
+                        "chunk_index": i,
+                        "hash": file_hash,
+                        "extension": filepath.suffix,
+                        "deleted": False,
+                    },
                 }
-            })
+            )
 
         # Update hash in tracking
         self.file_hashes[filepath_str] = file_hash
 
         # Log and notify completion
-        status_text = 'Added' if file_status == 'new' else 'Updated'
+        status_text = "Added" if file_status == "new" else "Updated"
         print(f"{status_text}: {filepath.name} ({len(chunks)} chunks)")
 
         if progress_callback:
-            progress_callback({
-                "type": "file_processed",
-                "data": {
-                    "file": filepath.name,
-                    "chunks": len(chunks),
-                    "status": file_status
+            progress_callback(
+                {
+                    "type": "file_processed",
+                    "data": {
+                        "file": filepath.name,
+                        "chunks": len(chunks),
+                        "status": file_status,
+                    },
                 }
-            })
+            )
 
         return documents
 
     def _process_deleted_files(
-        self,
-        current_files: set,
-        progress_callback: Optional[Callable] = None
+        self, current_files: set, progress_callback: Optional[Callable] = None
     ) -> int:
         """
         Mark chunks from deleted files and remove from tracking.
@@ -338,7 +368,7 @@ class DocumentIndexer:
         """
         deleted_count = 0
 
-        for filepath_str in list(self.file_hashes.keys()):
+        for filepath_str in self.file_hashes.keys():
             if filepath_str not in current_files:
                 self._mark_file_chunks_deleted(Path(filepath_str))
                 del self.file_hashes[filepath_str]
@@ -346,17 +376,17 @@ class DocumentIndexer:
                 print(f"Removed: {Path(filepath_str).name}")
 
                 if progress_callback:
-                    progress_callback({
-                        "type": "file_deleted",
-                        "data": {"file": Path(filepath_str).name}
-                    })
+                    progress_callback(
+                        {
+                            "type": "file_deleted",
+                            "data": {"file": Path(filepath_str).name},
+                        }
+                    )
 
         return deleted_count
 
     def _add_documents_to_index(
-        self,
-        documents: list[Dict],
-        progress_callback: Optional[Callable] = None
+        self, documents: list[Dict], progress_callback: Optional[Callable] = None
     ):
         """
         Generate embeddings and add documents to the FAISS index.
@@ -370,30 +400,31 @@ class DocumentIndexer:
 
         print(f"\nGenerating embeddings for {len(documents)} chunks...")
         if progress_callback:
-            progress_callback({
-                "type": "embedding_start",
-                "data": {
-                    "total_chunks": len(documents),
-                    "device": self.device,
-                    "batch_size": self.batch_size
+            progress_callback(
+                {
+                    "type": "embedding_start",
+                    "data": {
+                        "total_chunks": len(documents),
+                        "device": self.device,
+                        "batch_size": self.batch_size,
+                    },
                 }
-            })
+            )
 
         # Generate embeddings using optimized batched encoding
         texts = [d["text"] for d in documents]
         embeddings = self._encode_in_batches(texts, progress_callback)
 
         if progress_callback:
-            progress_callback({
-                "type": "embedding_complete",
-                "data": {"total_chunks": len(documents)}
-            })
+            progress_callback(
+                {"type": "embedding_complete", "data": {"total_chunks": len(documents)}}
+            )
 
         # Add to index
         if progress_callback:
             progress_callback({"type": "saving", "data": {}})
 
-        self.index.add(np.array(embeddings).astype('float32'))
+        self.index.add(np.array(embeddings).astype("float32"))
         self.metadata.extend([d["metadata"] for d in documents])
         self.texts.extend(texts)
 
@@ -408,7 +439,7 @@ class DocumentIndexer:
         docs_path: Path,
         current_files: set,
         stats: Dict[str, int],
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
     ) -> list[Dict]:
         """
         Scan directory and process all eligible files.
@@ -433,7 +464,7 @@ class DocumentIndexer:
 
             try:
                 # Read file content
-                with open(filepath, 'r', encoding='utf-8') as f:
+                with open(filepath, "r", encoding="utf-8") as f:
                     content = f.read()
 
                 if not content.strip():
@@ -441,33 +472,19 @@ class DocumentIndexer:
 
                 # Determine file status
                 file_hash = self._get_file_hash(filepath)
-                file_status, should_skip = self._get_file_status(
-                    filepath,
-                    file_hash
-                )
+                file_status, should_skip = self._get_file_status(filepath, file_hash)
 
                 # Update stats
                 stats[file_status] += 1
 
-                # Skip unchanged files
                 if should_skip:
-                    if progress_callback:
-                        progress_callback({
-                            "type": "file_skipped",
-                            "data": {
-                                "file": filepath.name,
-                                "status": "unchanged"
-                            }
-                        })
+                    # Skip unchanged files
+                    self.handle_skip_progress_callback()
                     continue
 
                 # Process file and collect documents
                 file_docs = self._process_single_file(
-                    filepath,
-                    content,
-                    file_hash,
-                    file_status,
-                    progress_callback
+                    filepath, content, file_hash, file_status, progress_callback
                 )
                 documents.extend(file_docs)
 
@@ -478,21 +495,33 @@ class DocumentIndexer:
             except Exception as e:
                 print(f"Error indexing {filepath}: {e}")
                 if progress_callback:
-                    progress_callback({
-                        "type": "error",
-                        "data": {
-                            "file": filepath.name,
-                            "message": str(e)
+                    progress_callback(
+                        {
+                            "type": "error",
+                            "data": {"file": filepath.name, "message": str(e)},
                         }
-                    })
+                    )
 
         return documents
+
+    def handle_skip_progress_callback(self):
+        if self.should_skip:
+            # The code snippet is checking if the `self.progress_callback` attribute is truthy
+            # (i.e., not `None` or `False`). If it is truthy, then the code inside the `if`
+            # block will be executed.
+            if self.progress_callback:
+                self.progress_callback(
+                    {
+                        "type": "file_skipped",
+                        "data": {"file": self.filepath.name, "status": "unchanged"},
+                    }
+                )
 
     def _finalize_indexing(
         self,
         documents: list[Dict],
         stats: Dict[str, int],
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
     ):
         """
         Add documents to index and print summary.
@@ -509,19 +538,16 @@ class DocumentIndexer:
                 f"({stats['new']} new, {stats['modified']} modified, "
                 f"{stats['unchanged']} unchanged)"
             )
-            if stats['deleted'] > 0:
+            if stats["deleted"] > 0:
                 print(f"  Removed {stats['deleted']} deleted files")
         else:
-            if stats['unchanged'] > 0:
-                print(
-                    f"✓ No changes detected "
-                    f"({stats['unchanged']} files unchanged)"
-                )
+            if stats["unchanged"] > 0:
+                print(f"✓ No changes detected ({stats['unchanged']} files unchanged)")
             else:
                 print("No documents found to index")
 
             # Still save to persist any deletions
-            if stats['deleted'] > 0:
+            if stats["deleted"] > 0:
                 if progress_callback:
                     progress_callback({"type": "saving", "data": {}})
                 self._save()
@@ -529,9 +555,7 @@ class DocumentIndexer:
                     progress_callback({"type": "save_complete", "data": {}})
 
     def index_directory(
-        self,
-        directory: str,
-        progress_callback: Optional[Callable] = None
+        self, directory: str, progress_callback: Optional[Callable] = None
     ) -> Dict[str, int]:
         """
         Index all eligible files in a directory.
@@ -550,32 +574,23 @@ class DocumentIndexer:
             "new": 0,
             "modified": 0,
             "unchanged": 0,
-            "deleted": 0
+            "deleted": 0,
         }
 
         print(f"Smart indexing directory: {directory}")
         if progress_callback:
-            progress_callback({
-                "type": "scan_start",
-                "data": {"directory": directory}
-            })
+            progress_callback({"type": "scan_start", "data": {"directory": directory}})
 
         # Track which files we've seen
         current_files = set()
 
         # Scan and process all files
         documents = self._scan_and_process_files(
-            docs_path,
-            current_files,
-            stats,
-            progress_callback
+            docs_path, current_files, stats, progress_callback
         )
 
         # Handle deleted files
-        stats["deleted"] = self._process_deleted_files(
-            current_files,
-            progress_callback
-        )
+        stats["deleted"] = self._process_deleted_files(current_files, progress_callback)
 
         # Add documents to index and report
         self._finalize_indexing(documents, stats, progress_callback)
@@ -588,11 +603,8 @@ class DocumentIndexer:
 
     def get_stats(self) -> Dict:
         # Count only non-deleted chunks
-        active_chunks = sum(1 for m in self.metadata if not m.get('deleted', False))
-        return {
-            "total_chunks": active_chunks,
-            "dimension": self.dimension
-        }
+        active_chunks = sum(1 for m in self.metadata if not m.get("deleted", False))
+        return {"total_chunks": active_chunks, "dimension": self.dimension}
 
     def get_indexed_files(self) -> Dict:
         """Get detailed information about indexed files."""
@@ -600,21 +612,18 @@ class DocumentIndexer:
         files_info = {}
 
         for metadata in self.metadata:
-            if metadata.get('deleted', False):
+            if metadata.get("deleted", False):
                 continue
 
-            file_path = metadata.get('file_path')
+            file_path = metadata.get("file_path")
             if file_path not in files_info:
                 files_info[file_path] = {
                     "file_path": file_path,
-                    "file_name": metadata.get('file_name'),
-                    "extension": metadata.get('extension'),
+                    "file_name": metadata.get("file_name"),
+                    "extension": metadata.get("extension"),
                     "chunk_count": 0,
-                    "hash": metadata.get('hash')
+                    "hash": metadata.get("hash"),
                 }
             files_info[file_path]["chunk_count"] += 1
 
-        return {
-            "total_files": len(files_info),
-            "files": list(files_info.values())
-        }
+        return {"total_files": len(files_info), "files": list(files_info.values())}
