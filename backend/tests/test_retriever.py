@@ -1,6 +1,7 @@
 """
 Tests for DocumentRetriever class and RAG functionality.
 """
+
 import pytest
 import json
 
@@ -8,7 +9,7 @@ import json
 class TestDocumentRetrieverInit:
     """Test DocumentRetriever initialization."""
 
-    def test_init_with_existing_index(self, temp_dir, mock_anthropic_client, mocker):
+    def test_init_with_existing_index(self, temp_dir, mock_ollama_client, mocker):
         """Test initialization when index files exist."""
         from retriever import DocumentRetriever
         import pickle
@@ -18,9 +19,9 @@ class TestDocumentRetrieverInit:
 
         # Create dummy files
         (persist_dir / "index.faiss").touch()
-        with open(persist_dir / "metadata.pkl", 'wb') as f:
+        with open(persist_dir / "metadata.pkl", "wb") as f:
             pickle.dump([{"file": "test.md"}], f)
-        with open(persist_dir / "texts.pkl", 'wb') as f:
+        with open(persist_dir / "texts.pkl", "wb") as f:
             pickle.dump(["test content"], f)
 
         retriever = DocumentRetriever(persist_directory=str(persist_dir))
@@ -29,11 +30,66 @@ class TestDocumentRetrieverInit:
         assert len(retriever.metadata) == 1
         assert len(retriever.texts) == 1
 
-    def test_init_without_index(self, temp_dir, mock_anthropic_client):
+    def test_init_without_index(self, temp_dir, mock_ollama_client):
         """Test initialization when no index exists."""
         from retriever import DocumentRetriever
 
         persist_dir = temp_dir / "db"
+        retriever = DocumentRetriever(persist_directory=str(persist_dir))
+
+        assert retriever.index is None
+        assert retriever.metadata == []
+        assert retriever.texts == []
+
+    def test_load_index_missing_metadata_file_resets_to_empty(
+        self, temp_dir, mock_ollama_client
+    ):
+        """index.faiss present but metadata.pkl absent → safe empty reset, no crash."""
+        from retriever import DocumentRetriever
+
+        persist_dir = temp_dir / "db"
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        (persist_dir / "index.faiss").touch()
+        # metadata.pkl and texts.pkl deliberately absent
+
+        retriever = DocumentRetriever(persist_directory=str(persist_dir))
+
+        assert retriever.index is None
+        assert retriever.metadata == []
+        assert retriever.texts == []
+
+    def test_load_index_missing_texts_file_resets_to_empty(
+        self, temp_dir, mock_ollama_client
+    ):
+        """index.faiss + metadata.pkl present but texts.pkl absent → safe empty reset."""
+        import pickle
+        from retriever import DocumentRetriever
+
+        persist_dir = temp_dir / "db"
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        (persist_dir / "index.faiss").touch()
+        with open(persist_dir / "metadata.pkl", "wb") as f:
+            pickle.dump([{"file": "test.md"}], f)
+        # texts.pkl deliberately absent
+
+        retriever = DocumentRetriever(persist_directory=str(persist_dir))
+
+        assert retriever.index is None
+        assert retriever.metadata == []
+        assert retriever.texts == []
+
+    def test_load_index_corrupt_pickle_resets_to_empty(
+        self, temp_dir, mock_ollama_client
+    ):
+        """Corrupt pickle files → safe empty reset rather than UnpicklingError crash."""
+        from retriever import DocumentRetriever
+
+        persist_dir = temp_dir / "db"
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        (persist_dir / "index.faiss").touch()
+        (persist_dir / "metadata.pkl").write_bytes(b"not valid pickle data!!!")
+        (persist_dir / "texts.pkl").write_bytes(b"also garbage")
+
         retriever = DocumentRetriever(persist_directory=str(persist_dir))
 
         assert retriever.index is None
@@ -53,7 +109,7 @@ class TestSearch:
         assert all("metadata" in r for r in results)
         assert all("score" in r for r in results)
 
-    def test_search_filters_deleted_chunks(self, temp_dir, mock_anthropic_client):
+    def test_search_filters_deleted_chunks(self, temp_dir, mock_ollama_client):
         """Test that deleted chunks are filtered from search results."""
         from retriever import DocumentRetriever
         import faiss
@@ -74,7 +130,7 @@ class TestSearch:
         assert len(results) <= 2
         assert all(not r["metadata"].get("deleted") for r in results)
 
-    def test_search_with_no_index(self, temp_dir, mock_anthropic_client):
+    def test_search_with_no_index(self, temp_dir, mock_ollama_client):
         """Test search when index is None."""
         from retriever import DocumentRetriever
 
@@ -94,7 +150,7 @@ class TestSearch:
 
         assert len(results) <= 3
 
-    def test_search_handles_empty_index(self, temp_dir, mock_anthropic_client):
+    def test_search_handles_empty_index(self, temp_dir, mock_ollama_client):
         """Test search with empty index."""
         from retriever import DocumentRetriever
         import faiss
@@ -107,6 +163,40 @@ class TestSearch:
 
         assert results == []
 
+    def test_search_short_circuits_before_faiss_when_ntotal_zero(
+        self, temp_dir, mock_ollama_client, mocker
+    ):
+        """FAISS search must NOT be called when the index is empty (ntotal==0).
+
+        Passing k=0 to FAISS is undefined behaviour in some builds; the guard
+        must short-circuit before that call.
+        """
+        from retriever import DocumentRetriever
+
+        retriever = DocumentRetriever(persist_directory=str(temp_dir / "db"))
+        retriever.index = mocker.MagicMock()
+        retriever.index.ntotal = 0
+
+        results = retriever.search("test query", top_k=5)
+
+        retriever.index.search.assert_not_called()
+        assert results == []
+
+    def test_search_short_circuits_before_faiss_when_top_k_zero(
+        self, temp_dir, mock_ollama_client, mocker
+    ):
+        """FAISS search must NOT be called when top_k <= 0."""
+        from retriever import DocumentRetriever
+
+        retriever = DocumentRetriever(persist_directory=str(temp_dir / "db"))
+        retriever.index = mocker.MagicMock()
+        retriever.index.ntotal = 10  # non-empty — guard must be top_k, not ntotal
+
+        results = retriever.search("test query", top_k=0)
+
+        retriever.index.search.assert_not_called()
+        assert results == []
+
 
 class TestAskStreaming:
     """Test streaming question answering."""
@@ -116,7 +206,9 @@ class TestAskStreaming:
         """Test that ask_streaming yields source information."""
         chunks = []
 
-        async for chunk in retriever_with_index.ask_streaming("What is authentication?"):
+        async for chunk in retriever_with_index.ask_streaming(
+            "What is authentication?"
+        ):
             chunks.append(chunk)
 
         # Should have at least sources message
@@ -141,14 +233,13 @@ class TestAskStreaming:
         """Test streaming with conversation history."""
         history = [
             {"role": "user", "content": "Previous question"},
-            {"role": "assistant", "content": "Previous answer"}
+            {"role": "assistant", "content": "Previous answer"},
         ]
 
         chunks = []
 
         async for chunk in retriever_with_index.ask_streaming(
-            "Follow-up question",
-            conversation_history=history
+            "Follow-up question", conversation_history=history
         ):
             chunks.append(chunk)
 
@@ -156,36 +247,37 @@ class TestAskStreaming:
         assert len(chunks) > 0
 
     @pytest.mark.asyncio
-    async def test_ask_streaming_builds_context_from_sources(self, retriever_with_index, mocker):
+    async def test_ask_streaming_builds_context_from_sources(
+        self, retriever_with_index
+    ):
         """Test that retrieved sources are included in LLM context."""
-        mock_stream = mocker.patch.object(
-            retriever_with_index.anthropic_client.messages,
-            'stream'
-        )
+        from unittest.mock import Mock, AsyncMock
 
-        class MockStream:
-            def __enter__(self):
-                return self
+        captured_kwargs = {}
 
-            def __exit__(self, *args):
-                pass
+        class MockChunk:
+            def __init__(self, content, done=False, done_reason=None):
+                self.message = Mock()
+                self.message.content = content
+                self.done = done
+                self.done_reason = done_reason
 
-            @property
-            def text_stream(self):
-                return iter(["Response"])
+        async def _stream():
+            yield MockChunk("Response", done=True, done_reason="stop")
 
-        mock_stream.return_value = MockStream()
+        def chat_impl(**kwargs):
+            captured_kwargs.update(kwargs)
+            return _stream()
+
+        retriever_with_index.ollama_client.chat = AsyncMock(side_effect=chat_impl)
 
         chunks = []
         async for chunk in retriever_with_index.ask_streaming("test query"):
             chunks.append(chunk)
 
-        # Verify stream was called with context
-        assert mock_stream.called
-        call_args = mock_stream.call_args
-        messages = call_args[1]["messages"]
-
-        # Should have system context with sources
+        # Verify chat was called with context in messages
+        assert "messages" in captured_kwargs
+        messages = captured_kwargs["messages"]
         assert len(messages) > 0
         assert messages[0]["role"] == "user"
 
@@ -198,10 +290,34 @@ class TestAskStreaming:
             chunks.append(chunk)
 
         # Should still complete (backend doesn't validate empty queries)
-        assert len(chunks) >= 0
 
     @pytest.mark.asyncio
-    async def test_ask_streaming_with_no_sources(self, temp_dir, mock_anthropic_client):
+    async def test_ask_streaming_yields_error_on_ollama_failure(
+        self, retriever_with_index
+    ):
+        """When Ollama raises an exception the generator must yield an error JSON
+        message rather than propagating the exception to the caller."""
+        from unittest.mock import AsyncMock
+
+        retriever_with_index.ollama_client.chat = AsyncMock(
+            side_effect=Exception("network error")
+        )
+        # Ensure the index has entries so search() runs (ntotal is 0 from mock by
+        # default; set it so the guard doesn't short-circuit before Ollama is called).
+        retriever_with_index.index.ntotal = 2
+
+        chunks = []
+        async for chunk in retriever_with_index.ask_streaming("test query"):
+            chunks.append(chunk)
+
+        messages = [json.loads(c.strip()) for c in chunks if c.strip()]
+        error_messages = [msg for msg in messages if msg["type"] == "error"]
+
+        assert len(error_messages) >= 1
+        assert "network error" in error_messages[0]["data"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_ask_streaming_with_no_sources(self, temp_dir, mock_ollama_client):
         """Test streaming when no relevant sources found."""
         from retriever import DocumentRetriever
         import faiss
@@ -261,62 +377,65 @@ class TestSourceMetadataExtraction:
         assert isinstance(sources_msg["data"], list)
 
 
-class TestAnthropicIntegration:
-    """Test integration with Anthropic Claude API."""
+class TestOllamaIntegration:
+    """Test integration with Ollama API."""
 
     @pytest.mark.asyncio
-    async def test_uses_correct_model(self, retriever_with_index, mocker):
-        """Test that correct Claude model is used."""
-        mock_stream = mocker.patch.object(
-            retriever_with_index.anthropic_client.messages,
-            'stream'
-        )
+    async def test_uses_correct_model(self, retriever_with_index):
+        """Test that correct Ollama model is used."""
+        from unittest.mock import Mock, AsyncMock
 
-        class MockStream:
-            def __enter__(self):
-                return self
+        captured_kwargs = {}
 
-            def __exit__(self, *args):
-                pass
+        class MockChunk:
+            def __init__(self, content, done=False, done_reason=None):
+                self.message = Mock()
+                self.message.content = content
+                self.done = done
+                self.done_reason = done_reason
 
-            @property
-            def text_stream(self):
-                return iter([])
+        async def _stream():
+            yield MockChunk("", done=True, done_reason="stop")
 
-        mock_stream.return_value = MockStream()
+        def chat_impl(**kwargs):
+            captured_kwargs.update(kwargs)
+            return _stream()
 
-        async for _ in retriever_with_index.ask_streaming("test"):
-            pass
+        retriever_with_index.ollama_client.chat = AsyncMock(side_effect=chat_impl)
 
-        call_args = mock_stream.call_args
-        assert call_args[1]["model"] == "claude-sonnet-4-20250514"
+        [chunk async for chunk in retriever_with_index.ask_streaming("test")]
+
+        assert captured_kwargs["model"] == "llama3.1:8b"
 
     @pytest.mark.asyncio
-    async def test_uses_correct_max_tokens(self, retriever_with_index, mocker):
-        """Test that max_tokens is set correctly."""
-        mock_stream = mocker.patch.object(
-            retriever_with_index.anthropic_client.messages,
-            'stream'
+    async def test_uses_correct_num_predict(self, retriever_with_index):
+        """Test that num_predict is set correctly from MAX_TOKENS env var."""
+        from unittest.mock import Mock, AsyncMock
+
+        captured_kwargs = {}
+
+        class MockChunk:
+            def __init__(self, content, done=False, done_reason=None):
+                self.message = Mock()
+                self.message.content = content
+                self.done = done
+                self.done_reason = done_reason
+
+        async def _stream():
+            yield MockChunk("", done=True, done_reason="stop")
+
+        def chat_impl(**kwargs):
+            captured_kwargs.update(kwargs)
+            return _stream()
+
+        retriever_with_index.ollama_client.chat = AsyncMock(side_effect=chat_impl)
+
+        [chunk async for chunk in retriever_with_index.ask_streaming("test")]
+
+        assert (
+            captured_kwargs["options"]["num_predict"]
+            == retriever_with_index.settings.max_tokens
         )
-
-        class MockStream:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                pass
-
-            @property
-            def text_stream(self):
-                return iter([])
-
-        mock_stream.return_value = MockStream()
-
-        async for _ in retriever_with_index.ask_streaming("test"):
-            pass
-
-        call_args = mock_stream.call_args
-        assert call_args[1]["max_tokens"] == 16384
 
 
 class TestJSONSerialization:

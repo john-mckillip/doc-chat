@@ -11,7 +11,7 @@ export interface Source {
 }
 
 export interface WebSocketMessage {
-    type: 'sources' | 'content' | 'done';
+    type: 'sources' | 'content' | 'done' | 'error' | 'fatal_error' | 'truncated';
     data?: Source[] | string | Record<string, unknown>;
 }
 
@@ -20,4 +20,26 @@ export interface UseWebSocketReturn {
     sendMessage: (query: string) => void;
     isConnected: boolean;
     isStreaming: boolean;
+    error: string | null;
+}
+
+export interface AppStats {
+    total_chunks: number;
+    dimension?: number;
+}
+
+export interface IndexProgress {
+    phase: string;
+    currentFile: string;
+    totalChunks: number;
+    message: string;
+}
+
+export interface IndexStats {
+    files: number;
+    chunks: number;
+    new: number;
+    modified: number;
+    unchanged: number;
+    deleted: number;
 }

@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -6,26 +7,69 @@ from dotenv import load_dotenv
 from indexer import DocumentIndexer
 from retriever import DocumentRetriever
 import asyncio
+from config import get_backend_settings
 
 # Load environment variables
 load_dotenv()
+settings = get_backend_settings()
 
-app = FastAPI()
+
+def _is_ready(app: FastAPI) -> bool:
+    return (
+        getattr(app.state, "startup_error", None) is None
+        and getattr(app.state, "indexer", None) is not None
+        and getattr(app.state, "retriever", None) is not None
+    )
+
+
+def _require_services(app: FastAPI) -> tuple[DocumentIndexer, DocumentRetriever]:
+    if not _is_ready(app):
+        startup_error = getattr(app.state, "startup_error", "Service not initialized")
+        raise RuntimeError(startup_error)
+
+    return app.state.indexer, app.state.retriever
+
+
+async def _try_send_fatal_error(websocket: WebSocket, message: str) -> None:
+    """Attempt to send a fatal_error message to the client; log if that also fails."""
+    try:
+        await websocket.send_text(
+            json.dumps({"type": "fatal_error", "data": {"message": message}})
+        )
+    except Exception as send_exc:
+        print(f"Failed to send error to client: {send_exc}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.settings = settings
+    app.state.indexer = None
+    app.state.retriever = None
+    app.state.startup_error = None
+
+    try:
+        app.state.indexer = DocumentIndexer(settings=settings)
+        app.state.retriever = DocumentRetriever(settings=settings)
+    except Exception as exc:
+        app.state.startup_error = str(exc)
+        print(f"Startup initialization failed: {exc}")
+
+    yield
+
+    app.state.indexer = None
+    app.state.retriever = None
+
+
+app = FastAPI(lifespan=lifespan)
 
 # CORS for React dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
-    ],  # Vite default port (both localhost and 127.0.0.1)
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-indexer = DocumentIndexer()
-retriever = DocumentRetriever()
 
 
 class IndexRequest(BaseModel):
@@ -41,6 +85,11 @@ class Message(BaseModel):
 async def index_documents(request: IndexRequest):
     """Index documents from directory"""
     try:
+        indexer, _ = _require_services(app)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    try:
         stats = indexer.index_directory(request.directory)
         return {"success": True, "stats": stats}
     except Exception as e:
@@ -50,13 +99,32 @@ async def index_documents(request: IndexRequest):
 @app.get("/api/stats")
 async def get_stats():
     """Get indexing statistics"""
+    try:
+        indexer, _ = _require_services(app)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
     return indexer.get_stats()
 
 
 @app.get("/api/indexed-files")
 async def get_indexed_files():
     """Get detailed information about indexed files"""
+    try:
+        indexer, _ = _require_services(app)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
     return indexer.get_indexed_files()
+
+
+@app.get("/api/health")
+async def get_health():
+    startup_error = getattr(app.state, "startup_error", None)
+    return {
+        "ready": _is_ready(app),
+        "startup_error": startup_error,
+    }
 
 
 @app.websocket("/ws/index")
@@ -65,16 +133,35 @@ async def websocket_index(websocket: WebSocket):
     await websocket.accept()
 
     try:
+        indexer, retriever = _require_services(websocket.app)
+    except RuntimeError as exc:
+        await websocket.send_text(
+            json.dumps({"type": "fatal_error", "data": {"message": str(exc)}})
+        )
+        await websocket.close()
+        return
+
+    try:
         # Receive indexing request
         data = await websocket.receive_text()
-        request_data = json.loads(data)
+        try:
+            request_data = json.loads(data)
+        except json.JSONDecodeError:
+            await websocket.send_text(
+                json.dumps(
+                    {"type": "error", "data": {"message": "Invalid JSON in request"}}
+                )
+            )
+            await websocket.close()
+            return
         directory = request_data.get("directory")
 
         if not directory:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "data": {"message": "No directory provided"}
-            }))
+            await websocket.send_text(
+                json.dumps(
+                    {"type": "error", "data": {"message": "No directory provided"}}
+                )
+            )
             await websocket.close()
             return
 
@@ -91,7 +178,10 @@ async def websocket_index(websocket: WebSocket):
                 # Schedule the coroutine on the main event loop
                 asyncio.run_coroutine_threadsafe(send_progress(msg), loop)
 
-            return indexer.index_directory(directory, progress_callback=progress_callback)
+            return indexer.index_directory(
+                directory,
+                progress_callback=progress_callback,
+            )
 
         # Run in executor to avoid blocking
         stats = await asyncio.to_thread(run_indexing)
@@ -100,23 +190,15 @@ async def websocket_index(websocket: WebSocket):
         retriever.reload()
 
         # Send completion signal
-        await websocket.send_text(json.dumps({
-            "type": "done",
-            "data": {"stats": stats}
-        }))
+        await websocket.send_text(
+            json.dumps({"type": "done", "data": {"stats": stats}})
+        )
 
     except WebSocketDisconnect:
         print("Client disconnected from indexing")
     except Exception as e:
-        error_msg = f"Indexing error: {e}"
-        print(error_msg)
-        try:
-            await websocket.send_text(json.dumps({
-                "type": "fatal_error",
-                "data": {"message": str(e)}
-            }))
-        except Exception:
-            pass
+        print(f"Indexing error: {e}")
+        await _try_send_fatal_error(websocket, str(e))
         await websocket.close()
 
 
@@ -127,24 +209,43 @@ async def websocket_chat(websocket: WebSocket):
     conversation_history = []
 
     try:
+        _, retriever = _require_services(websocket.app)
+    except RuntimeError as exc:
+        await websocket.send_text(
+            json.dumps({"type": "fatal_error", "data": {"message": str(exc)}})
+        )
+        await websocket.close()
+        return
+
+    try:
         while True:
             # Receive message from client
             data = await websocket.receive_text()
-            message_data = json.loads(data)
+            try:
+                message_data = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "data": {"message": "Invalid JSON in request"},
+                        }
+                    )
+                )
+                continue
 
             query = message_data.get("query")
             if not query:
                 continue
 
             # Add user message to history
-            conversation_history.append({
-                "role": "user",
-                "content": query
-            })
+            conversation_history.append({"role": "user", "content": query})
 
             # Stream response
             assistant_message = ""
-            async for chunk in retriever.ask_streaming(query, conversation_history[:-1]):
+            async for chunk in retriever.ask_streaming(
+                query, conversation_history[:-1]
+            ):
                 await websocket.send_text(chunk)
 
                 # Collect assistant message for history
@@ -154,22 +255,22 @@ async def websocket_chat(websocket: WebSocket):
 
             # Add complete assistant message to history
             if assistant_message:
-                conversation_history.append({
-                    "role": "assistant",
-                    "content": assistant_message
-                })
+                conversation_history.append(
+                    {"role": "assistant", "content": assistant_message}
+                )
 
             # Send completion signal
-            await websocket.send_text(json.dumps({
-                "type": "done"
-            }) + "\n")
+            await websocket.send_text(json.dumps({"type": "done"}) + "\n")
 
     except WebSocketDisconnect:
         print("Client disconnected")
     except Exception as e:
         print(f"WebSocket error: {e}")
+        await _try_send_fatal_error(websocket, str(e))
         await websocket.close()
+
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

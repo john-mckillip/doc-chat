@@ -29,8 +29,8 @@ A local development tool that lets you chat with your project documentation usin
          │
          ↓
 ┌─────────────────┐
-│  Claude API     │
-│  (Anthropic)    │
+│  Ollama         │
+│  (Local LLM)    │
 └─────────────────┘
 ```
 
@@ -54,7 +54,7 @@ A local development tool that lets you chat with your project documentation usin
    - User asks a question via the web UI
    - Query is converted to a vector embedding
    - FAISS finds the 5 most semantically similar chunks (excluding deleted)
-   - Chunks are sent as context to Claude API
+   - Chunks are sent as context to a local Ollama model
    - Response streams back in real-time via WebSocket
 
 3. **Smart Updates**
@@ -68,7 +68,7 @@ A local development tool that lets you chat with your project documentation usin
 
 - Python 3.10+ (3.11 or 3.12 recommended)
 - Node.js 18+
-- Anthropic API key ([get one here](https://console.anthropic.com/))
+- [Ollama](https://ollama.com/download) installed and running locally
 - **Windows ARM64 users**: Use WSL2 for best compatibility (see below)
 
 ## Windows ARM64 Setup
@@ -111,7 +111,12 @@ pip install -r requirements.txt
 
 # Set up environment variables
 cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
+# Optionally edit .env to set OLLAMA_MODEL or OLLAMA_HOST
+```
+
+**Pull the default model (once Ollama is installed):**
+```bash
+ollama pull llama3.1:8b
 ```
 
 **requirements.txt:**
@@ -119,13 +124,13 @@ cp .env.example .env
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 websockets==12.0
-anthropic==0.7.8
+ollama>=0.4.0
 python-dotenv==1.0.0
 tiktoken>=0.7.0
 langchain==0.1.0
 langchain-community==0.0.10
 faiss-cpu==1.13.2
-sentence-transformers==2.2.2
+sentence-transformers>=2.7.0
 numpy>=1.25.0,<2.0
 ```
 
@@ -139,6 +144,14 @@ npm install
 
 # Start development server
 npm run dev
+```
+
+Optional frontend environment variables (`frontend/.env`):
+
+```bash
+VITE_API_BASE_URL=http://localhost:8000
+# Optional override; by default WS URL is derived from VITE_API_BASE_URL
+VITE_WS_BASE_URL=ws://localhost:8000
 ```
 
 ## Usage
@@ -199,8 +212,9 @@ Example queries to try:
 Create a `.env` file in the `backend/` directory:
 
 ```bash
-# Required
-ANTHROPIC_API_KEY=sk-ant-...
+# Optional - Ollama Configuration
+OLLAMA_HOST=http://localhost:11434   # Ollama server URL (default: localhost)
+OLLAMA_MODEL=llama3.1:8b            # Model to use (default: llama3.1:8b)
 
 # Optional - Vector Database
 FAISS_PERSIST_DIR=./data/faiss_db                    # Directory to persist FAISS index
@@ -216,7 +230,15 @@ SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2          # Sentence transformer mode
 INDEX_FILE_TYPES=.md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml  # Comma-separated file extensions to index
 
 # Optional - AI Response Length
-MAX_TOKENS=16384                                      # Maximum tokens in AI responses (default: 16384, max: 200000)
+MAX_TOKENS=4096                                       # Maximum tokens in AI responses (default: 4096)
+
+# Optional - Retrieval Settings
+RETRIEVAL_TOP_K=5                                     # Number of relevant chunks retrieved per query
+RETRIEVAL_SEARCH_MULTIPLIER=3                         # Extra FAISS candidates fetched before filtering
+
+# Optional - Prompt Template Override
+# Must include both {context} and {query} placeholders.
+# RAG_PROMPT_TEMPLATE=Based on the following documentation context, answer the question.\n\nContext:\n{context}\n\nQuestion: {query}
 
 # Optional - Embedding Performance (see Performance Optimization section)
 EMBEDDING_BATCH_SIZE=64        # Batch size for GPU encoding
@@ -278,19 +300,44 @@ self.text_splitter = RecursiveCharacterTextSplitter(
 If AI responses are getting cut off, you can increase the maximum token limit via the `MAX_TOKENS` environment variable in your `.env` file:
 
 ```bash
-# Default (approximately 12,000-16,000 words)
+# Default
+MAX_TOKENS=4096
+
+# For longer responses
+MAX_TOKENS=8192
+
+# For very long responses (check your model's context window)
 MAX_TOKENS=16384
-
-# For longer responses (approximately 24,000-32,000 words)
-MAX_TOKENS=32768
-
-# Maximum supported by Claude Sonnet 4
-MAX_TOKENS=200000
 ```
 
-The Claude Sonnet 4 model supports up to 200,000 output tokens, so you can set this as high as needed. Each token is roughly 3/4 of a word on average.
+The effective limit depends on the model's context window. `llama3.1:8b` supports a 128k context window. Each token is roughly 3/4 of a word on average.
 
-**Note:** Higher values may increase API costs and response times, but ensure complete responses for complex questions.
+**Note:** Higher values increase memory usage and response times.
+
+### Retrieval Tuning
+
+You can tune retrieval behavior with:
+
+- `RETRIEVAL_TOP_K` - final number of chunks sent to the model
+- `RETRIEVAL_SEARCH_MULTIPLIER` - extra FAISS candidates fetched before deleted/irrelevant chunks are filtered
+
+Suggested starting points:
+
+```bash
+# Small docs set (faster, focused)
+RETRIEVAL_TOP_K=4
+RETRIEVAL_SEARCH_MULTIPLIER=2
+
+# Large docs set (better recall)
+RETRIEVAL_TOP_K=6
+RETRIEVAL_SEARCH_MULTIPLIER=4
+```
+
+Guidance:
+
+- If answers miss relevant files, increase `RETRIEVAL_TOP_K` first.
+- If many chunks are marked deleted or results look noisy, increase `RETRIEVAL_SEARCH_MULTIPLIER`.
+- Increase gradually to avoid unnecessary latency and context bloat.
 
 ## Tailwind CSS 4 Note
 
@@ -366,6 +413,17 @@ Get indexing statistics.
 {
   "total_chunks": 387,
   "dimension": 384
+}
+```
+
+#### GET `/api/health`
+Get backend readiness state.
+
+**Response:**
+```json
+{
+  "ready": true,
+  "startup_error": null
 }
 ```
 
@@ -564,7 +622,7 @@ doc-chat/
 ├── backend/
 │   ├── app.py                # FastAPI application & WebSocket
 │   ├── indexer.py            # Document ingestion & chunking
-│   ├── retriever.py          # Vector search & Claude integration
+│   ├── retriever.py          # Vector search & Ollama integration
 │   ├── requirements.txt
 │   ├── .env.example
 │   └── data/
@@ -594,7 +652,7 @@ doc-chat/
 - **FastAPI** - Modern Python web framework
 - **FAISS** - Vector database for semantic search
 - **LangChain** - Text splitting and document processing
-- **Anthropic SDK** - Claude API integration
+- **Ollama** - Local LLM inference (free, no API key required)
 - **Sentence Transformers** - Embedding generation
 - **WebSockets** - Real-time streaming communication
 
@@ -669,7 +727,7 @@ pip install -r requirements.txt
 - Try re-indexing: Delete `data/faiss_db/` and re-index
 
 ### AI responses getting cut off
-- Increase `MAX_TOKENS` in your `.env` file (default: 16384, max: 200000)
+- Increase `MAX_TOKENS` in your `.env` file (default: 4096)
 - See the "Adjusting AI Response Length" section for details
 - Restart your backend server after changing `.env`
 
@@ -684,10 +742,11 @@ pip install -r requirements.txt
 - Install PyTorch with CUDA support: `pip install torch --index-url https://download.pytorch.org/whl/cu118`
 - Check GPU memory: Large batch sizes may exceed VRAM, try `EMBEDDING_BATCH_SIZE=16`
 
-### Claude API errors
-- Verify `ANTHROPIC_API_KEY` is set correctly in `.env`
-- Check API usage limits in Anthropic console
-- Ensure you're using a supported model name (`claude-sonnet-4-20250514`)
+### Ollama connection errors
+- Ensure Ollama is running: `ollama serve`
+- Verify the model is pulled: `ollama pull llama3.1:8b`
+- Check `OLLAMA_HOST` in `.env` if using a non-default port or remote host
+- Test connectivity: `curl http://localhost:11434/api/tags`
 
 ### Windows ARM64 compilation errors
 If you get errors about missing compilers or "can't find Rust compiler":
@@ -838,7 +897,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## Acknowledgments
 
-- [Anthropic](https://www.anthropic.com/) for Claude API
+- [Ollama](https://ollama.com/) for local LLM inference
 - [FAISS](https://github.com/facebookresearch/faiss) for vector similarity search
 - [LangChain](https://www.langchain.com/) for document processing utilities
 - [FastAPI](https://fastapi.tiangolo.com/) for the excellent web framework
@@ -851,6 +910,14 @@ MIT License - see [LICENSE](LICENSE) file for details
 - 💬 Discussions: [GitHub Discussions](https://github.com/john-mckillip/doc-chat/discussions)
 
 ## Changelog
+
+### v1.3.0 (2026-02-20)
+**Migrate from Anthropic API to Ollama (local LLM)**
+- Replaced Anthropic Claude API with [Ollama](https://ollama.com/) for fully local, free inference — no API key required
+- Default model: `llama3.1:8b` (128k context window, ~5 GB). Configurable via `OLLAMA_MODEL` env var
+- Added `OLLAMA_HOST` env var for connecting to a non-default or remote Ollama instance
+- Lowered `MAX_TOKENS` default from 16,384 to 4,096 to suit local model constraints
+- Streaming remains real-time via WebSocket with identical JSON protocol (no frontend changes required)
 
 ### v1.2.0 (2026-01-22)
 **Performance Optimization**

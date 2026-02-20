@@ -1,15 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { MessageList } from './MessageList';
 import { SourcePanel } from './SourcePanel';
+import {
+  IndexingCompleteFeedback,
+  IndexingProgressFeedback
+} from './IndexingFeedback';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useIndexWebSocket } from '../hooks/useIndexWebSocket';
+import { WS_ENDPOINTS } from '../utils/api';
 
 export const Chat: React.FC = () => {
   const [input, setInput] = useState('');
   const [showReindexModal, setShowReindexModal] = useState(false);
   const [reindexPath, setReindexPath] = useState('');
-  const { messages, sendMessage, isConnected, isStreaming } = useWebSocket('ws://localhost:8000/ws/chat');
-  const { isIndexing, progress, stats: indexStats, startIndexing } = useIndexWebSocket('ws://localhost:8000/ws/index');
+  const { messages, sendMessage, isConnected, isStreaming } = useWebSocket(WS_ENDPOINTS.chat);
+  const { isIndexing, progress, stats: indexStats, startIndexing } = useIndexWebSocket(WS_ENDPOINTS.index);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,23 +116,15 @@ export const Chat: React.FC = () => {
             />
 
             {isIndexing && progress.message && (
-              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                <p className="text-sm text-blue-800">{progress.message}</p>
-                {progress.currentFile && (
-                  <p className="text-xs text-blue-600 mt-1">📄 {progress.currentFile}</p>
-                )}
-              </div>
+              <IndexingProgressFeedback progress={progress} className="mb-4" />
             )}
 
             {indexStats && !isIndexing && (
-              <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-                <p className="text-sm text-green-800 font-medium">✓ Re-indexing Complete!</p>
-                <p className="text-xs text-green-700 mt-1">
-                  {indexStats.files} files • {indexStats.chunks} chunks
-                  {indexStats.new > 0 && ` • ${indexStats.new} new`}
-                  {indexStats.modified > 0 && ` • ${indexStats.modified} modified`}
-                </p>
-              </div>
+              <IndexingCompleteFeedback
+                stats={indexStats}
+                title="✓ Re-indexing Complete!"
+                className="mb-4"
+              />
             )}
 
             <div className="flex gap-2 justify-end">

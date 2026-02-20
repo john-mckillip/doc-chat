@@ -12,6 +12,8 @@ from unittest.mock import Mock
 import tempfile
 import shutil
 
+RNG = np.random.default_rng(42)
+
 
 # ============================================================================
 # Mock heavy dependencies BEFORE importing application code
@@ -28,7 +30,7 @@ class MockSentenceTransformer:
         """Return fixed embeddings (384 dimensions)."""
         if isinstance(texts, str):
             texts = [texts]
-        return np.random.rand(len(texts), 384).astype('float32')
+        return RNG.random((len(texts), 384)).astype('float32')
 
     def to(self, device):
         """Mock device placement."""
@@ -43,7 +45,7 @@ class MockSentenceTransformer:
         """Mock multiprocess encoding - returns same as regular encode."""
         if isinstance(texts, str):
             texts = [texts]
-        return np.random.rand(len(texts), 384).astype('float32')
+        return RNG.random((len(texts), 384)).astype('float32')
 
     def stop_multi_process_pool(self, pool):
         """Mock stopping pool - no-op."""
@@ -143,25 +145,26 @@ def sample_docs(temp_dir):
 
 
 @pytest.fixture
-def mock_anthropic_client(mocker):
-    """Mock Anthropic client for LLM interactions."""
+def mock_ollama_client(mocker):
+    """Mock Ollama async client for LLM interactions."""
+    from unittest.mock import AsyncMock
     mock_client = Mock()
 
-    # Mock streaming response
-    class MockStream:
-        def __enter__(self):
-            return self
+    class MockChunk:
+        def __init__(self, content, done=False, done_reason=None):
+            self.message = Mock()
+            self.message.content = content
+            self.done = done
+            self.done_reason = done_reason
 
-        def __exit__(self, *args):
-            pass
+    async def _default_stream():
+        for text in ["Hello", " ", "world", "!"]:
+            yield MockChunk(text)
+        yield MockChunk("", done=True, done_reason="stop")
 
-        @property
-        def text_stream(self):
-            return iter(["Hello", " ", "world", "!"])
+    mock_client.chat = AsyncMock(side_effect=lambda **kwargs: _default_stream())
 
-    mock_client.messages.stream = Mock(return_value=MockStream())
-
-    mocker.patch('anthropic.Anthropic', return_value=mock_client)
+    mocker.patch('ollama.AsyncClient', return_value=mock_client)
 
     return mock_client
 
@@ -170,7 +173,8 @@ def mock_anthropic_client(mocker):
 def mock_env_vars(mocker):
     """Mock environment variables."""
     mocker.patch.dict('os.environ', {
-        'ANTHROPIC_API_KEY': 'test-api-key-123',
+        'OLLAMA_HOST': 'http://localhost:11434',
+        'OLLAMA_MODEL': 'llama3.1:8b',
         'FAISS_PERSIST_DIR': './test_data/faiss_db'
     })
 
@@ -212,7 +216,7 @@ def indexer_with_data(temp_dir):
 
 
 @pytest.fixture
-def retriever_with_index(temp_dir, mock_anthropic_client):
+def retriever_with_index(temp_dir, mock_ollama_client):
     """Create a retriever with a pre-loaded index."""
     import pickle
     from retriever import DocumentRetriever

@@ -8,13 +8,12 @@ from fastapi.websockets import WebSocketDisconnect
 
 
 @pytest.fixture
-def client(mock_anthropic_client, mock_env_vars):
+def client(mock_ollama_client, mock_env_vars):
     """Create a test client with mocked dependencies."""
     from app import app
-    # TestClient from starlette takes app as first positional argument
-    client = TestClient(app)
-    yield client
-    client.close()
+    # Use context manager so startup/shutdown lifespan handlers run
+    with TestClient(app) as client:
+        yield client
 
 
 class TestRESTEndpoints:
@@ -22,7 +21,7 @@ class TestRESTEndpoints:
 
     def test_index_documents_success(self, client, sample_docs, mocker):
         """Test successful document indexing via POST /api/index."""
-        mock_index_dir = mocker.patch('app.indexer.index_directory')
+        mock_index_dir = mocker.patch.object(client.app.state.indexer, 'index_directory')
         mock_index_dir.return_value = {
             "files": 5,
             "chunks": 42,
@@ -41,14 +40,11 @@ class TestRESTEndpoints:
         assert data["stats"]["chunks"] == 42
 
     def test_index_documents_invalid_directory(self, client):
-        """Test indexing with non-existent directory."""
+        """Non-existent directory returns 500 with a descriptive error message."""
         response = client.post("/api/index", json={"directory": "/nonexistent/path"})
 
-        # App returns success but with no documents indexed
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert data["stats"]["chunks"] == 0  # index_directory returns "chunks", not "total_chunks"
+        assert response.status_code == 500
+        assert "does not exist" in response.json()["detail"]
 
     def test_index_documents_missing_directory_field(self, client):
         """Test indexing without directory field."""
@@ -59,7 +55,7 @@ class TestRESTEndpoints:
 
     def test_get_stats_with_index(self, client, mocker):
         """Test GET /api/stats with indexed documents."""
-        mock_get_stats = mocker.patch('app.indexer.get_stats')
+        mock_get_stats = mocker.patch.object(client.app.state.indexer, 'get_stats')
         mock_get_stats.return_value = {
             "total_chunks": 387,
             "dimension": 384
@@ -74,7 +70,7 @@ class TestRESTEndpoints:
 
     def test_get_stats_without_index(self, client, mocker):
         """Test GET /api/stats with no indexed documents."""
-        mock_get_stats = mocker.patch('app.indexer.get_stats')
+        mock_get_stats = mocker.patch.object(client.app.state.indexer, 'get_stats')
         mock_get_stats.return_value = {
             "total_chunks": 0,
             "dimension": 384
@@ -94,7 +90,7 @@ class TestWebSocketIndexing:
         """Test successful WebSocket indexing."""
         messages_received = []
 
-        mock_index_dir = mocker.patch('app.indexer.index_directory')
+        mock_index_dir = mocker.patch.object(client.app.state.indexer, 'index_directory')
         mock_index_dir.return_value = {
             "files": 3,
             "chunks": 25,
@@ -129,20 +125,17 @@ class TestWebSocketIndexing:
             assert "directory" in message["data"]["message"].lower()
 
     def test_websocket_index_invalid_json(self, client):
-        """Test WebSocket indexing with invalid JSON."""
+        """Invalid JSON sends a structured 'error' message (not a silent disconnect)."""
         with client.websocket_connect("/ws/index") as websocket:
-            try:
-                websocket.send_text("not json")
-                message = websocket.receive_json()
-                # Should receive an error or fatal_error
-                assert message["type"] in ["error", "fatal_error"]
-            except WebSocketDisconnect:
-                # Connection closed due to error is acceptable
-                pass
+            websocket.send_text("not json")
+            message = websocket.receive_json()
+
+            assert message["type"] == "error"
+            assert "Invalid JSON" in message["data"]["message"]
 
     def test_websocket_index_indexing_error(self, client, mocker):
         """Test WebSocket indexing when indexer raises an error."""
-        mock_index_dir = mocker.patch('app.indexer.index_directory')
+        mock_index_dir = mocker.patch.object(client.app.state.indexer, 'index_directory')
         mock_index_dir.side_effect = Exception("Indexing failed")
 
         with client.websocket_connect("/ws/index") as websocket:
@@ -161,7 +154,7 @@ class TestWebSocketChat:
         """Test sending a chat message via WebSocket."""
         messages_received = []
 
-        mock_ask_streaming = mocker.patch('app.retriever.ask_streaming')
+        mock_ask_streaming = mocker.patch.object(client.app.state.retriever, 'ask_streaming')
 
         # Mock async generator
         async def mock_stream():
@@ -191,7 +184,7 @@ class TestWebSocketChat:
 
     def test_websocket_chat_maintains_history(self, client, mocker):
         """Test that conversation history is maintained."""
-        mock_ask_streaming = mocker.patch('app.retriever.ask_streaming')
+        mock_ask_streaming = mocker.patch.object(client.app.state.retriever, 'ask_streaming')
 
         async def mock_stream():
             yield json.dumps({"type": "content", "data": "Response"}) + "\n"
@@ -221,21 +214,32 @@ class TestWebSocketChat:
             assert len(conversation_history) >= 2
 
     def test_websocket_chat_invalid_json(self, client):
-        """Test WebSocket chat with invalid JSON."""
+        """Invalid JSON in chat sends a structured 'error' message and keeps connection open."""
         with client.websocket_connect("/ws/chat") as websocket:
-            try:
-                websocket.send_text("{invalid json")
-                # Should either receive error or disconnect
-                message = websocket.receive_text()
-                data = json.loads(message)
-                assert "error" in data["type"].lower()
-            except (WebSocketDisconnect, json.JSONDecodeError):
-                # Disconnect is acceptable for invalid input
-                pass
+            websocket.send_text("{invalid json")
+            message = websocket.receive_json()
+
+            assert message["type"] == "error"
+            assert "Invalid JSON" in message["data"]["message"]
+
+    def test_websocket_chat_sends_fatal_error_on_streaming_failure(self, client, mocker):
+        """When ask_streaming raises, the client receives a fatal_error before disconnect."""
+        mocker.patch.object(
+            client.app.state.retriever,
+            "ask_streaming",
+            side_effect=Exception("llm down"),
+        )
+
+        with client.websocket_connect("/ws/chat") as websocket:
+            websocket.send_json({"query": "What is auth?"})
+            message = websocket.receive_json()
+
+            assert message["type"] == "fatal_error"
+            assert "llm down" in message["data"]["message"]
 
     def test_websocket_chat_empty_query(self, client, mocker):
         """Test WebSocket chat with empty query."""
-        mock_ask_streaming = mocker.patch('app.retriever.ask_streaming')
+        mock_ask_streaming = mocker.patch.object(client.app.state.retriever, 'ask_streaming')
 
         async def mock_stream():
             yield json.dumps({"type": "content", "data": "Response"}) + "\n"

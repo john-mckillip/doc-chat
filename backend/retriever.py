@@ -1,16 +1,25 @@
-from typing import List, Dict, AsyncGenerator
-import anthropic
+from typing import List, Dict, AsyncGenerator, Optional
+from ollama import AsyncClient
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import faiss
 import pickle
-import os
 import json
 from pathlib import Path
+from config import BackendSettings, get_backend_settings
 
 
 class DocumentRetriever:
-    def __init__(self, persist_directory: str = os.getenv("FAISS_PERSIST_DIR", "./data/faiss_db")):
+    def __init__(
+        self,
+        persist_directory: str | None = None,
+        settings: BackendSettings | None = None,
+    ):
+        self.settings = settings or get_backend_settings()
+
+        if persist_directory is None:
+            persist_directory = self.settings.faiss_persist_dir
+
         self.persist_directory = Path(persist_directory)
         self.index_file = self.persist_directory / "index.faiss"
         self.metadata_file = self.persist_directory / "metadata.pkl"
@@ -26,21 +35,34 @@ class DocumentRetriever:
 
         # Load embedding model
         print("Loading embedding model...")
-        self.model = SentenceTransformer(
-            os.getenv(
-                "SENTENCE_TRANSFORMER_MODEL",
-                "all-MiniLM-L6-v2"
-            )
-        )
+        self.model = SentenceTransformer(self.settings.sentence_transformer_model)
 
-        # Initialize Anthropic client
-        self.anthropic_client = anthropic.Anthropic(
-            api_key=os.getenv("ANTHROPIC_API_KEY")
+        # Initialize Ollama client
+        self.ollama_client = AsyncClient(
+            host=self.settings.ollama_host
         )
 
     def _load_index(self):
         """Load the FAISS index and associated data from disk."""
-        if self.index_file.exists():
+        if not self.index_file.exists():
+            print("No index found - please index documents first")
+            self.index = None
+            self.metadata = []
+            self.texts = []
+            return
+
+        if not self.metadata_file.exists() or not self.texts_file.exists():
+            print(
+                f"Warning: index.faiss exists but companion files are missing "
+                f"(metadata={self.metadata_file.exists()}, texts={self.texts_file.exists()}). "
+                "Resetting to empty state — please re-index."
+            )
+            self.index = None
+            self.metadata = []
+            self.texts = []
+            return
+
+        try:
             print("Loading FAISS index...")
             self.index = faiss.read_index(str(self.index_file))
 
@@ -51,8 +73,11 @@ class DocumentRetriever:
                 self.texts = pickle.load(f)
 
             print(f"✓ Loaded {len(self.texts)} document chunks")
-        else:
-            print("No index found - please index documents first")
+        except Exception as exc:
+            print(
+                f"Warning: failed to load index from {self.persist_directory} ({exc}). "
+                "Resetting to empty state — please re-index."
+            )
             self.index = None
             self.metadata = []
             self.texts = []
@@ -64,7 +89,7 @@ class DocumentRetriever:
 
     def search(self, query: str, top_k: int = 5) -> List[Dict]:
         """Search for relevant documents"""
-        if self.index is None:
+        if self.index is None or self.index.ntotal == 0 or top_k <= 0:
             return []
 
         # Generate query embedding
@@ -72,7 +97,7 @@ class DocumentRetriever:
         query_vector = np.array(query_embedding).astype('float32')
 
         # Search FAISS index - get more results to account for deleted chunks
-        search_k = top_k * 3  # Get extra results to filter
+        search_k = top_k * self.settings.retrieval_search_multiplier
         distances, indices = self.index.search(query_vector, min(search_k, self.index.ntotal))
 
         # Build results, filtering out deleted chunks
@@ -96,57 +121,75 @@ class DocumentRetriever:
 
         return sources
 
+    def _build_context(self, sources: List[Dict]) -> str:
+        return "\n\n".join([
+            f"Source: {source['metadata']['file_name']}\n{source['text']}"
+            for source in sources
+        ])
+
+    def _build_messages(
+        self,
+        query: str,
+        context: str,
+        conversation_history: Optional[List[Dict]] = None,
+    ) -> List[Dict]:
+        prompt = self.settings.rag_prompt_template.format(
+            context=context,
+            query=query,
+        )
+        messages = list(conversation_history or [])
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    def _serialize_sources(self, sources: List[Dict]) -> str:
+        return json.dumps({
+            "type": "sources",
+            "data": [
+                {
+                    "file": source['metadata']['file_name'],
+                    "path": source['metadata']['file_path'],
+                    "chunk": source['metadata']['chunk_index']
+                }
+                for source in sources
+            ]
+        }) + "\n"
+
     async def ask_streaming(
         self,
         query: str,
-        conversation_history: List[Dict] = None
+        conversation_history: Optional[List[Dict]] = None
     ) -> AsyncGenerator[str, None]:
         """Ask question with streaming response"""
 
         # Retrieve relevant context
-        sources = self.search(query, top_k=5)
+        sources = self.search(query, top_k=self.settings.retrieval_top_k)
 
         # Build context from sources
-        context = "\n\n".join([
-            f"Source: {s['metadata']['file_name']}\n{s['text']}"
-            for s in sources
-        ])
+        context = self._build_context(sources)
 
         # Build messages
-        messages = conversation_history or []
-        messages.append({
-            "role": "user",
-            "content": f"""Based on the following documentation context, please answer the question.
-
-Context:
-{context}
-
-Question: {query}
-
-Please cite which files you're referencing in your answer."""
-        })
+        messages = self._build_messages(query, context, conversation_history)
 
         # First yield the sources
-        yield json.dumps({
-            "type": "sources",
-            "data": [
-                {
-                    "file": s['metadata']['file_name'],
-                    "path": s['metadata']['file_path'],
-                    "chunk": s['metadata']['chunk_index']
-                }
-                for s in sources
-            ]
-        }) + "\n"
+        yield self._serialize_sources(sources)
 
         # Stream the response
-        with self.anthropic_client.messages.stream(
-            model="claude-sonnet-4-20250514",
-            max_tokens=int(os.getenv("MAX_TOKENS", "16384")),
-            messages=messages
-        ) as stream:
-            for text in stream.text_stream:
-                yield json.dumps({
-                    "type": "content",
-                    "data": text
-                }) + "\n"
+        num_predict = self.settings.max_tokens
+        try:
+            stream = await self.ollama_client.chat(
+                model=self.settings.ollama_model,
+                messages=messages,
+                stream=True,
+                options={"num_predict": num_predict}
+            )
+            async for chunk in stream:
+                text = chunk.message.content
+                if text:
+                    yield json.dumps({"type": "content", "data": text}) + "\n"
+                if chunk.done and chunk.done_reason == "length":
+                    yield json.dumps({
+                        "type": "truncated",
+                        "data": {"reason": "max_tokens", "output_tokens": num_predict}
+                    }) + "\n"
+        except Exception as exc:
+            yield json.dumps({"type": "error", "data": {"message": f"LLM error: {exc}"}}) + "\n"

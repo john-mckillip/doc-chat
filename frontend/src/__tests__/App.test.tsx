@@ -24,6 +24,7 @@ describe('App', () => {
 
   it('renders without crashing', () => {
     vi.mocked(global.fetch).mockResolvedValueOnce({
+      ok: true,
       json: async () => ({ total_chunks: 0 })
     } as Response)
 
@@ -33,18 +34,20 @@ describe('App', () => {
 
   it('fetches stats on mount', async () => {
     vi.mocked(global.fetch).mockResolvedValueOnce({
+      ok: true,
       json: async () => ({ total_chunks: 100 })
     } as Response)
 
     render(<App />)
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/api/stats')
+      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/api/stats', expect.any(Object))
     })
   })
 
   it('shows IndexStatus when not indexed', async () => {
     vi.mocked(global.fetch).mockResolvedValueOnce({
+      ok: true,
       json: async () => ({ total_chunks: 0 })
     } as Response)
 
@@ -57,6 +60,7 @@ describe('App', () => {
 
   it('shows Chat when indexed', async () => {
     vi.mocked(global.fetch).mockResolvedValueOnce({
+      ok: true,
       json: async () => ({ total_chunks: 100 })
     } as Response)
 
@@ -81,9 +85,11 @@ describe('App', () => {
   it('refetches stats when onIndexComplete is called', async () => {
     vi.mocked(global.fetch)
       .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ total_chunks: 0 })
       } as Response)
       .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ total_chunks: 100 })
       } as Response)
 
