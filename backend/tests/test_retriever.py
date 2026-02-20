@@ -1,6 +1,7 @@
 """
 Tests for DocumentRetriever class and RAG functionality.
 """
+
 import pytest
 import json
 
@@ -18,9 +19,9 @@ class TestDocumentRetrieverInit:
 
         # Create dummy files
         (persist_dir / "index.faiss").touch()
-        with open(persist_dir / "metadata.pkl", 'wb') as f:
+        with open(persist_dir / "metadata.pkl", "wb") as f:
             pickle.dump([{"file": "test.md"}], f)
-        with open(persist_dir / "texts.pkl", 'wb') as f:
+        with open(persist_dir / "texts.pkl", "wb") as f:
             pickle.dump(["test content"], f)
 
         retriever = DocumentRetriever(persist_directory=str(persist_dir))
@@ -205,7 +206,9 @@ class TestAskStreaming:
         """Test that ask_streaming yields source information."""
         chunks = []
 
-        async for chunk in retriever_with_index.ask_streaming("What is authentication?"):
+        async for chunk in retriever_with_index.ask_streaming(
+            "What is authentication?"
+        ):
             chunks.append(chunk)
 
         # Should have at least sources message
@@ -230,14 +233,13 @@ class TestAskStreaming:
         """Test streaming with conversation history."""
         history = [
             {"role": "user", "content": "Previous question"},
-            {"role": "assistant", "content": "Previous answer"}
+            {"role": "assistant", "content": "Previous answer"},
         ]
 
         chunks = []
 
         async for chunk in retriever_with_index.ask_streaming(
-            "Follow-up question",
-            conversation_history=history
+            "Follow-up question", conversation_history=history
         ):
             chunks.append(chunk)
 
@@ -245,9 +247,12 @@ class TestAskStreaming:
         assert len(chunks) > 0
 
     @pytest.mark.asyncio
-    async def test_ask_streaming_builds_context_from_sources(self, retriever_with_index):
+    async def test_ask_streaming_builds_context_from_sources(
+        self, retriever_with_index
+    ):
         """Test that retrieved sources are included in LLM context."""
         from unittest.mock import Mock, AsyncMock
+
         captured_kwargs = {}
 
         class MockChunk:
@@ -379,6 +384,7 @@ class TestOllamaIntegration:
     async def test_uses_correct_model(self, retriever_with_index):
         """Test that correct Ollama model is used."""
         from unittest.mock import Mock, AsyncMock
+
         captured_kwargs = {}
 
         class MockChunk:
@@ -405,6 +411,7 @@ class TestOllamaIntegration:
     async def test_uses_correct_num_predict(self, retriever_with_index):
         """Test that num_predict is set correctly from MAX_TOKENS env var."""
         from unittest.mock import Mock, AsyncMock
+
         captured_kwargs = {}
 
         class MockChunk:
@@ -425,7 +432,10 @@ class TestOllamaIntegration:
 
         [chunk async for chunk in retriever_with_index.ask_streaming("test")]
 
-        assert captured_kwargs["options"]["num_predict"] == retriever_with_index.settings.max_tokens
+        assert (
+            captured_kwargs["options"]["num_predict"]
+            == retriever_with_index.settings.max_tokens
+        )
 
 
 class TestJSONSerialization:
