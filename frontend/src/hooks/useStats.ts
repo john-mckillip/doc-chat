@@ -4,33 +4,43 @@ import type { AppStats } from '../types';
 
 export const useStats = () => {
     const [stats, setStats] = useState<AppStats | null>(null);
-    const [isIndexed, setIsIndexed] = useState(false);
+    const isIndexed = (stats?.total_chunks ?? 0) > 0;
 
-    const loadStats = useCallback(async (signal?: AbortSignal) => {
+    const fetchStats = useCallback(async (signal?: AbortSignal): Promise<AppStats | null> => {
         try {
-            const data = await fetchIndexStats(signal);
-            setStats(data);
-            setIsIndexed(data.total_chunks > 0);
+            return await fetchIndexStats(signal);
         } catch (error) {
             if (signal?.aborted) {
-                return;
+                return null;
             }
             console.error('Failed to fetch stats:', error);
+            return null;
         }
     }, []);
 
+    const refreshStats = useCallback(async (signal?: AbortSignal) => {
+        const data = await fetchStats(signal);
+        if (data) {
+            setStats(data);
+        }
+    }, [fetchStats]);
+
     useEffect(() => {
         const abortController = new AbortController();
-        loadStats(abortController.signal);
+        void fetchStats(abortController.signal).then(data => {
+            if (data) {
+                setStats(data);
+            }
+        });
 
         return () => {
             abortController.abort();
         };
-    }, [loadStats]);
+    }, [fetchStats]);
 
     return {
         stats,
         isIndexed,
-        refreshStats: loadStats
+        refreshStats
     };
 };

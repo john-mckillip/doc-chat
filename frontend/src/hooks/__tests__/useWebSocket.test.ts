@@ -10,16 +10,15 @@ let mockWs: MockWebSocket | null = null;
 beforeEach(() => {
   setupWebSocketMock();
 
-  // Subclass MockWebSocket to capture each constructed instance.
-  // Must be a class (not a plain function) so that `new WebSocket(...)` works.
-  class CapturingMockWS extends MockWebSocket {
-    constructor(url: string) {
-      super(url);
-      mockWs = this;
+  const CapturingMockWS = new Proxy(MockWebSocket, {
+    construct(Target, args: ConstructorParameters<typeof MockWebSocket>) {
+      const instance = new Target(...args);
+      mockWs = instance;
+      return instance;
     }
-  }
+  });
 
-  (global as unknown as { WebSocket: unknown }).WebSocket = CapturingMockWS;
+  (global as unknown as { WebSocket: typeof MockWebSocket }).WebSocket = CapturingMockWS;
 });
 
 afterEach(() => {
