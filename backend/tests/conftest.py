@@ -12,6 +12,8 @@ from unittest.mock import Mock
 import tempfile
 import shutil
 
+RNG = np.random.default_rng(42)
+
 
 # ============================================================================
 # Mock heavy dependencies BEFORE importing application code
@@ -28,7 +30,7 @@ class MockSentenceTransformer:
         """Return fixed embeddings (384 dimensions)."""
         if isinstance(texts, str):
             texts = [texts]
-        return np.random.Generator().random((len(texts), 384)).astype('float32')
+        return RNG.random((len(texts), 384)).astype('float32')
 
     def to(self, device):
         """Mock device placement."""
@@ -43,7 +45,7 @@ class MockSentenceTransformer:
         """Mock multiprocess encoding - returns same as regular encode."""
         if isinstance(texts, str):
             texts = [texts]
-        return np.random.Generator().random((len(texts), 384)).astype('float32')
+        return RNG.random((len(texts), 384)).astype('float32')
 
     def stop_multi_process_pool(self, pool):
         """Mock stopping pool - no-op."""

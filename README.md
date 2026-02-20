@@ -232,6 +232,14 @@ INDEX_FILE_TYPES=.md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml  # Comma-separat
 # Optional - AI Response Length
 MAX_TOKENS=4096                                       # Maximum tokens in AI responses (default: 4096)
 
+# Optional - Retrieval Settings
+RETRIEVAL_TOP_K=5                                     # Number of relevant chunks retrieved per query
+RETRIEVAL_SEARCH_MULTIPLIER=3                         # Extra FAISS candidates fetched before filtering
+
+# Optional - Prompt Template Override
+# Must include both {context} and {query} placeholders.
+# RAG_PROMPT_TEMPLATE=Based on the following documentation context, answer the question.\n\nContext:\n{context}\n\nQuestion: {query}
+
 # Optional - Embedding Performance (see Performance Optimization section)
 EMBEDDING_BATCH_SIZE=64        # Batch size for GPU encoding
 EMBEDDING_CPU_BATCH_SIZE=32    # Batch size for CPU encoding
@@ -305,6 +313,31 @@ MAX_TOKENS=16384
 The effective limit depends on the model's context window. `llama3.1:8b` supports a 128k context window. Each token is roughly 3/4 of a word on average.
 
 **Note:** Higher values increase memory usage and response times.
+
+### Retrieval Tuning
+
+You can tune retrieval behavior with:
+
+- `RETRIEVAL_TOP_K` - final number of chunks sent to the model
+- `RETRIEVAL_SEARCH_MULTIPLIER` - extra FAISS candidates fetched before deleted/irrelevant chunks are filtered
+
+Suggested starting points:
+
+```bash
+# Small docs set (faster, focused)
+RETRIEVAL_TOP_K=4
+RETRIEVAL_SEARCH_MULTIPLIER=2
+
+# Large docs set (better recall)
+RETRIEVAL_TOP_K=6
+RETRIEVAL_SEARCH_MULTIPLIER=4
+```
+
+Guidance:
+
+- If answers miss relevant files, increase `RETRIEVAL_TOP_K` first.
+- If many chunks are marked deleted or results look noisy, increase `RETRIEVAL_SEARCH_MULTIPLIER`.
+- Increase gradually to avoid unnecessary latency and context bloat.
 
 ## Tailwind CSS 4 Note
 

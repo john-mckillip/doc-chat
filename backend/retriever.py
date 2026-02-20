@@ -1,4 +1,4 @@
-from typing import List, Dict, AsyncGenerator
+from typing import List, Dict, AsyncGenerator, Optional
 from ollama import AsyncClient
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -76,7 +76,7 @@ class DocumentRetriever:
         query_vector = np.array(query_embedding).astype('float32')
 
         # Search FAISS index - get more results to account for deleted chunks
-        search_k = top_k * 3  # Get extra results to filter
+        search_k = top_k * self.settings.retrieval_search_multiplier
         distances, indices = self.index.search(query_vector, min(search_k, self.index.ntotal))
 
         # Build results, filtering out deleted chunks
@@ -100,48 +100,57 @@ class DocumentRetriever:
 
         return sources
 
+    def _build_context(self, sources: List[Dict]) -> str:
+        return "\n\n".join([
+            f"Source: {source['metadata']['file_name']}\n{source['text']}"
+            for source in sources
+        ])
+
+    def _build_messages(
+        self,
+        query: str,
+        context: str,
+        conversation_history: Optional[List[Dict]] = None,
+    ) -> List[Dict]:
+        prompt = self.settings.rag_prompt_template.format(
+            context=context,
+            query=query,
+        )
+        messages = list(conversation_history or [])
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    def _serialize_sources(self, sources: List[Dict]) -> str:
+        return json.dumps({
+            "type": "sources",
+            "data": [
+                {
+                    "file": source['metadata']['file_name'],
+                    "path": source['metadata']['file_path'],
+                    "chunk": source['metadata']['chunk_index']
+                }
+                for source in sources
+            ]
+        }) + "\n"
+
     async def ask_streaming(
         self,
         query: str,
-        conversation_history: List[Dict] = None
+        conversation_history: Optional[List[Dict]] = None
     ) -> AsyncGenerator[str, None]:
         """Ask question with streaming response"""
 
         # Retrieve relevant context
-        sources = self.search(query, top_k=5)
+        sources = self.search(query, top_k=self.settings.retrieval_top_k)
 
         # Build context from sources
-        context = "\n\n".join([
-            f"Source: {s['metadata']['file_name']}\n{s['text']}"
-            for s in sources
-        ])
+        context = self._build_context(sources)
 
         # Build messages
-        messages = conversation_history or []
-        messages.append({
-            "role": "user",
-            "content": f"""Based on the following documentation context, please answer the question.
-
-            Context:
-            {context}
-
-            Question: {query}
-
-            Please cite which files you're referencing in your answer."""
-        })
+        messages = self._build_messages(query, context, conversation_history)
 
         # First yield the sources
-        yield json.dumps({
-            "type": "sources",
-            "data": [
-                {
-                    "file": s['metadata']['file_name'],
-                    "path": s['metadata']['file_path'],
-                    "chunk": s['metadata']['chunk_index']
-                }
-                for s in sources
-            ]
-        }) + "\n"
+        yield self._serialize_sources(sources)
 
         # Stream the response
         num_predict = self.settings.max_tokens

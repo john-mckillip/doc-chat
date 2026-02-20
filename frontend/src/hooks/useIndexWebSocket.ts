@@ -1,20 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-
-interface IndexProgress {
-  phase: string;
-  currentFile: string;
-  totalChunks: number;
-  message: string;
-}
-
-interface IndexStats {
-  files: number;
-  chunks: number;
-  new: number;
-  modified: number;
-  unchanged: number;
-  deleted: number;
-}
+import type { IndexProgress, IndexStats } from '../types';
 
 export const useIndexWebSocket = (url: string) => {
   const [isIndexing, setIsIndexing] = useState(false);

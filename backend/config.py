@@ -23,6 +23,9 @@ class BackendSettings:
     min_chunks_for_multiprocess: int
     index_file_types: List[str]
     cors_origins: List[str]
+    retrieval_top_k: int
+    retrieval_search_multiplier: int
+    rag_prompt_template: str
 
 
 def get_backend_settings() -> BackendSettings:
@@ -55,4 +58,17 @@ def get_backend_settings() -> BackendSettings:
             )
         ),
         cors_origins=cors_origins,
+        retrieval_top_k=int(os.getenv("RETRIEVAL_TOP_K", "5")),
+        retrieval_search_multiplier=int(os.getenv("RETRIEVAL_SEARCH_MULTIPLIER", "3")),
+        rag_prompt_template=os.getenv(
+            "RAG_PROMPT_TEMPLATE",
+            """Based on the following documentation context, please answer the question.
+
+Context:
+{context}
+
+Question: {query}
+
+Please cite which files you're referencing in your answer.""",
+        ),
     )
