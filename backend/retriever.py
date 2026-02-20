@@ -1,16 +1,25 @@
 from typing import List, Dict, AsyncGenerator
-import anthropic
+from ollama import AsyncClient
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import faiss
 import pickle
-import os
 import json
 from pathlib import Path
+from config import BackendSettings, get_backend_settings
 
 
 class DocumentRetriever:
-    def __init__(self, persist_directory: str = os.getenv("FAISS_PERSIST_DIR", "./data/faiss_db")):
+    def __init__(
+        self,
+        persist_directory: str | None = None,
+        settings: BackendSettings | None = None,
+    ):
+        self.settings = settings or get_backend_settings()
+
+        if persist_directory is None:
+            persist_directory = self.settings.faiss_persist_dir
+
         self.persist_directory = Path(persist_directory)
         self.index_file = self.persist_directory / "index.faiss"
         self.metadata_file = self.persist_directory / "metadata.pkl"
@@ -26,16 +35,11 @@ class DocumentRetriever:
 
         # Load embedding model
         print("Loading embedding model...")
-        self.model = SentenceTransformer(
-            os.getenv(
-                "SENTENCE_TRANSFORMER_MODEL",
-                "all-MiniLM-L6-v2"
-            )
-        )
+        self.model = SentenceTransformer(self.settings.sentence_transformer_model)
 
-        # Initialize Anthropic client
-        self.anthropic_client = anthropic.Anthropic(
-            api_key=os.getenv("ANTHROPIC_API_KEY")
+        # Initialize Ollama client
+        self.ollama_client = AsyncClient(
+            host=self.settings.ollama_host
         )
 
     def _load_index(self):
@@ -118,12 +122,12 @@ class DocumentRetriever:
             "role": "user",
             "content": f"""Based on the following documentation context, please answer the question.
 
-Context:
-{context}
+            Context:
+            {context}
 
-Question: {query}
+            Question: {query}
 
-Please cite which files you're referencing in your answer."""
+            Please cite which files you're referencing in your answer."""
         })
 
         # First yield the sources
@@ -140,13 +144,19 @@ Please cite which files you're referencing in your answer."""
         }) + "\n"
 
         # Stream the response
-        with self.anthropic_client.messages.stream(
-            model="claude-sonnet-4-20250514",
-            max_tokens=int(os.getenv("MAX_TOKENS", "16384")),
-            messages=messages
-        ) as stream:
-            for text in stream.text_stream:
+        num_predict = self.settings.max_tokens
+        stream = await self.ollama_client.chat(
+            model=self.settings.ollama_model,
+            messages=messages,
+            stream=True,
+            options={"num_predict": num_predict}
+        )
+        async for chunk in stream:
+            text = chunk.message.content
+            if text:
+                yield json.dumps({"type": "content", "data": text}) + "\n"
+            if chunk.done and chunk.done_reason == "length":
                 yield json.dumps({
-                    "type": "content",
-                    "data": text
+                    "type": "truncated",
+                    "data": {"reason": "max_tokens", "output_tokens": num_predict}
                 }) + "\n"

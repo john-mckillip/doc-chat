@@ -54,3 +54,5 @@ yarn-debug.log*
 yarn-error.log*
 coverage.xml
 .coverage
+.audits/*
+

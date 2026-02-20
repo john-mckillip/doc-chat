@@ -1,14 +1,15 @@
-import React, { useState, useEffect}  from 'react';
+import React, { useState, useEffect } from 'react';
 import { useIndexWebSocket } from '../hooks/useIndexWebSocket';
+import { WS_ENDPOINTS } from '../utils/api';
 
 interface IndexStatusProps {
-    stats: { total_chunks: number } | null;
-    onIndexComplete: () => void;
+  stats: { total_chunks: number } | null;
+  onIndexComplete: () => void;
 }
 
 export const IndexStatus: React.FC<IndexStatusProps> = ({ stats, onIndexComplete }) => {
   const [directory, setDirectory] = useState('');
-  const { isIndexing, progress, stats: indexStats, error: wsError, startIndexing } = useIndexWebSocket('ws://localhost:8000/ws/index');
+  const { isIndexing, progress, stats: indexStats, error: wsError, startIndexing } = useIndexWebSocket(WS_ENDPOINTS.index);
   const [error, setError] = useState<string | null>(null);
 
   // Update error from WebSocket

@@ -3,13 +3,14 @@ import { MessageList } from './MessageList';
 import { SourcePanel } from './SourcePanel';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useIndexWebSocket } from '../hooks/useIndexWebSocket';
+import { WS_ENDPOINTS } from '../utils/api';
 
 export const Chat: React.FC = () => {
   const [input, setInput] = useState('');
   const [showReindexModal, setShowReindexModal] = useState(false);
   const [reindexPath, setReindexPath] = useState('');
-  const { messages, sendMessage, isConnected, isStreaming } = useWebSocket('ws://localhost:8000/ws/chat');
-  const { isIndexing, progress, stats: indexStats, startIndexing } = useIndexWebSocket('ws://localhost:8000/ws/index');
+  const { messages, sendMessage, isConnected, isStreaming } = useWebSocket(WS_ENDPOINTS.chat);
+  const { isIndexing, progress, stats: indexStats, startIndexing } = useIndexWebSocket(WS_ENDPOINTS.index);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

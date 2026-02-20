@@ -7,17 +7,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import hashlib
 import pickle
 import torch
-import os
-
-# Embedding configuration - can be overridden via environment variables
-DEFAULT_BATCH_SIZE = int(os.environ.get("EMBEDDING_BATCH_SIZE", "64"))  # GPU batch size
-CPU_BATCH_SIZE = int(os.environ.get("EMBEDDING_CPU_BATCH_SIZE", "32"))  # Smaller for CPU
-MAX_CPU_WORKERS = int(os.environ.get("EMBEDDING_MAX_WORKERS", "4"))     # For CPU multiprocessing
-FILE_IO_WORKERS = int(os.environ.get("FILE_IO_WORKERS", "8"))          # For parallel file reading
-# CPU multiprocessing threshold - disabled by default (999999) because it causes
-# noisy output on WSL2/Windows due to process spawning re-importing modules.
-# Set to a lower value (e.g., 500) via env var to enable for large datasets on native Linux.
-MIN_CHUNKS_FOR_MULTIPROCESS = int(os.environ.get("MIN_CHUNKS_FOR_MULTIPROCESS", "999999"))
+from config import BackendSettings, get_backend_settings
 
 # Directory and file exclusions for indexing
 EXCLUDED_DIRS = {
@@ -35,7 +25,16 @@ EXCLUDED_FILES = {
 
 
 class DocumentIndexer:
-    def __init__(self, persist_directory: str = "./data/faiss_db"):
+    def __init__(
+        self,
+        persist_directory: Optional[str] = None,
+        settings: Optional[BackendSettings] = None,
+    ):
+        self.settings = settings or get_backend_settings()
+
+        if persist_directory is None:
+            persist_directory = self.settings.faiss_persist_dir
+
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
         self.index_file = self.persist_directory / "index.faiss"
@@ -45,8 +44,7 @@ class DocumentIndexer:
 
         # Load embedding model
         print("Loading embedding model...")
-        self.model = SentenceTransformer(
-            os.getenv("SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"))
+        self.model = SentenceTransformer(self.settings.sentence_transformer_model)
         self.dimension = 384  # all-MiniLM-L6-v2 dimension
 
         # Detect optimal device and configure for performance
@@ -55,7 +53,11 @@ class DocumentIndexer:
             self.model.to(self.device)
 
         # Configure batch size based on device
-        self.batch_size = DEFAULT_BATCH_SIZE if self.device.startswith('cuda') else CPU_BATCH_SIZE
+        self.batch_size = (
+            self.settings.embedding_batch_size
+            if self.device.startswith('cuda')
+            else self.settings.embedding_cpu_batch_size
+        )
         self.use_multiprocess = self.device == "cpu"
 
         # Load or create FAISS index
@@ -78,8 +80,8 @@ class DocumentIndexer:
             self.file_hashes = {}
 
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=int(os.getenv("CHUNK_SIZE", 1000)),
-            chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 200)),
+            chunk_size=self.settings.chunk_size,
+            chunk_overlap=self.settings.chunk_overlap,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
 
@@ -99,8 +101,7 @@ class DocumentIndexer:
                 return False
 
         # Check extension (configurable via INDEX_FILE_TYPES env var)
-        file_types = os.getenv("INDEX_FILE_TYPES", ".md,.txt,.py,.cs,.js,.ts,.tsx,.json,.yaml,.yml")
-        extensions = {ext.strip() for ext in file_types.split(',')}
+        extensions = {ext.lower() for ext in self.settings.index_file_types}
         return filepath.suffix.lower() in extensions
 
     def _get_existing_hash(self, filepath: Path) -> str:
@@ -147,7 +148,7 @@ class DocumentIndexer:
         total_texts = len(texts)
 
         # Use multiprocessing for large datasets on CPU
-        if self.use_multiprocess and total_texts >= MIN_CHUNKS_FOR_MULTIPROCESS:
+        if self.use_multiprocess and total_texts >= self.settings.min_chunks_for_multiprocess:
             return self._encode_multiprocess(texts, progress_callback)
 
         # Single-process batched encoding (GPU or small CPU workloads)
@@ -194,7 +195,10 @@ class DocumentIndexer:
         import multiprocessing
 
         # Determine number of workers (leave one core for main process)
-        num_workers = min(MAX_CPU_WORKERS, max(1, multiprocessing.cpu_count() - 1))
+        num_workers = min(
+            self.settings.embedding_max_workers,
+            max(1, multiprocessing.cpu_count() - 1)
+        )
 
         if progress_callback:
             progress_callback({

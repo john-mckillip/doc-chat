@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -6,26 +7,59 @@ from dotenv import load_dotenv
 from indexer import DocumentIndexer
 from retriever import DocumentRetriever
 import asyncio
+from config import get_backend_settings
 
 # Load environment variables
 load_dotenv()
 
-app = FastAPI()
+
+def _is_ready(app: FastAPI) -> bool:
+    return (
+        getattr(app.state, "startup_error", None) is None
+        and getattr(app.state, "indexer", None) is not None
+        and getattr(app.state, "retriever", None) is not None
+    )
+
+
+def _require_services(app: FastAPI) -> tuple[DocumentIndexer, DocumentRetriever]:
+    if not _is_ready(app):
+        startup_error = getattr(app.state, "startup_error", "Service not initialized")
+        raise RuntimeError(startup_error)
+
+    return app.state.indexer, app.state.retriever
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_backend_settings()
+    app.state.settings = settings
+    app.state.indexer = None
+    app.state.retriever = None
+    app.state.startup_error = None
+
+    try:
+        app.state.indexer = DocumentIndexer(settings=settings)
+        app.state.retriever = DocumentRetriever(settings=settings)
+    except Exception as exc:
+        app.state.startup_error = str(exc)
+        print(f"Startup initialization failed: {exc}")
+
+    yield
+
+    app.state.indexer = None
+    app.state.retriever = None
+
+app = FastAPI(lifespan=lifespan)
+settings = get_backend_settings()
 
 # CORS for React dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
-    ],  # Vite default port (both localhost and 127.0.0.1)
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-indexer = DocumentIndexer()
-retriever = DocumentRetriever()
 
 
 class IndexRequest(BaseModel):
@@ -41,6 +75,11 @@ class Message(BaseModel):
 async def index_documents(request: IndexRequest):
     """Index documents from directory"""
     try:
+        indexer, _ = _require_services(app)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    try:
         stats = indexer.index_directory(request.directory)
         return {"success": True, "stats": stats}
     except Exception as e:
@@ -50,19 +89,48 @@ async def index_documents(request: IndexRequest):
 @app.get("/api/stats")
 async def get_stats():
     """Get indexing statistics"""
+    try:
+        indexer, _ = _require_services(app)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
     return indexer.get_stats()
 
 
 @app.get("/api/indexed-files")
 async def get_indexed_files():
     """Get detailed information about indexed files"""
+    try:
+        indexer, _ = _require_services(app)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
     return indexer.get_indexed_files()
+
+
+@app.get("/api/health")
+async def get_health():
+    startup_error = getattr(app.state, "startup_error", None)
+    return {
+        "ready": _is_ready(app),
+        "startup_error": startup_error,
+    }
 
 
 @app.websocket("/ws/index")
 async def websocket_index(websocket: WebSocket):
     """WebSocket endpoint for real-time indexing with progress updates"""
     await websocket.accept()
+
+    try:
+        indexer, retriever = _require_services(websocket.app)
+    except RuntimeError as exc:
+        await websocket.send_text(json.dumps({
+            "type": "fatal_error",
+            "data": {"message": str(exc)}
+        }))
+        await websocket.close()
+        return
 
     try:
         # Receive indexing request
@@ -91,7 +159,10 @@ async def websocket_index(websocket: WebSocket):
                 # Schedule the coroutine on the main event loop
                 asyncio.run_coroutine_threadsafe(send_progress(msg), loop)
 
-            return indexer.index_directory(directory, progress_callback=progress_callback)
+            return indexer.index_directory(
+                directory,
+                progress_callback=progress_callback,
+            )
 
         # Run in executor to avoid blocking
         stats = await asyncio.to_thread(run_indexing)
@@ -125,6 +196,16 @@ async def websocket_chat(websocket: WebSocket):
     """WebSocket endpoint for real-time chat"""
     await websocket.accept()
     conversation_history = []
+
+    try:
+        _, retriever = _require_services(websocket.app)
+    except RuntimeError as exc:
+        await websocket.send_text(json.dumps({
+            "type": "fatal_error",
+            "data": {"message": str(exc)}
+        }))
+        await websocket.close()
+        return
 
     try:
         while True:

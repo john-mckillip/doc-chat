@@ -8,7 +8,7 @@ import json
 class TestDocumentRetrieverInit:
     """Test DocumentRetriever initialization."""
 
-    def test_init_with_existing_index(self, temp_dir, mock_anthropic_client, mocker):
+    def test_init_with_existing_index(self, temp_dir, mock_ollama_client, mocker):
         """Test initialization when index files exist."""
         from retriever import DocumentRetriever
         import pickle
@@ -29,7 +29,7 @@ class TestDocumentRetrieverInit:
         assert len(retriever.metadata) == 1
         assert len(retriever.texts) == 1
 
-    def test_init_without_index(self, temp_dir, mock_anthropic_client):
+    def test_init_without_index(self, temp_dir, mock_ollama_client):
         """Test initialization when no index exists."""
         from retriever import DocumentRetriever
 
@@ -53,7 +53,7 @@ class TestSearch:
         assert all("metadata" in r for r in results)
         assert all("score" in r for r in results)
 
-    def test_search_filters_deleted_chunks(self, temp_dir, mock_anthropic_client):
+    def test_search_filters_deleted_chunks(self, temp_dir, mock_ollama_client):
         """Test that deleted chunks are filtered from search results."""
         from retriever import DocumentRetriever
         import faiss
@@ -74,7 +74,7 @@ class TestSearch:
         assert len(results) <= 2
         assert all(not r["metadata"].get("deleted") for r in results)
 
-    def test_search_with_no_index(self, temp_dir, mock_anthropic_client):
+    def test_search_with_no_index(self, temp_dir, mock_ollama_client):
         """Test search when index is None."""
         from retriever import DocumentRetriever
 
@@ -94,7 +94,7 @@ class TestSearch:
 
         assert len(results) <= 3
 
-    def test_search_handles_empty_index(self, temp_dir, mock_anthropic_client):
+    def test_search_handles_empty_index(self, temp_dir, mock_ollama_client):
         """Test search with empty index."""
         from retriever import DocumentRetriever
         import faiss
@@ -156,36 +156,34 @@ class TestAskStreaming:
         assert len(chunks) > 0
 
     @pytest.mark.asyncio
-    async def test_ask_streaming_builds_context_from_sources(self, retriever_with_index, mocker):
+    async def test_ask_streaming_builds_context_from_sources(self, retriever_with_index):
         """Test that retrieved sources are included in LLM context."""
-        mock_stream = mocker.patch.object(
-            retriever_with_index.anthropic_client.messages,
-            'stream'
-        )
+        from unittest.mock import Mock, AsyncMock
+        captured_kwargs = {}
 
-        class MockStream:
-            def __enter__(self):
-                return self
+        class MockChunk:
+            def __init__(self, content, done=False, done_reason=None):
+                self.message = Mock()
+                self.message.content = content
+                self.done = done
+                self.done_reason = done_reason
 
-            def __exit__(self, *args):
-                pass
+        async def _stream():
+            yield MockChunk("Response", done=True, done_reason="stop")
 
-            @property
-            def text_stream(self):
-                return iter(["Response"])
+        def chat_impl(**kwargs):
+            captured_kwargs.update(kwargs)
+            return _stream()
 
-        mock_stream.return_value = MockStream()
+        retriever_with_index.ollama_client.chat = AsyncMock(side_effect=chat_impl)
 
         chunks = []
         async for chunk in retriever_with_index.ask_streaming("test query"):
             chunks.append(chunk)
 
-        # Verify stream was called with context
-        assert mock_stream.called
-        call_args = mock_stream.call_args
-        messages = call_args[1]["messages"]
-
-        # Should have system context with sources
+        # Verify chat was called with context in messages
+        assert "messages" in captured_kwargs
+        messages = captured_kwargs["messages"]
         assert len(messages) > 0
         assert messages[0]["role"] == "user"
 
@@ -198,10 +196,9 @@ class TestAskStreaming:
             chunks.append(chunk)
 
         # Should still complete (backend doesn't validate empty queries)
-        assert len(chunks) >= 0
 
     @pytest.mark.asyncio
-    async def test_ask_streaming_with_no_sources(self, temp_dir, mock_anthropic_client):
+    async def test_ask_streaming_with_no_sources(self, temp_dir, mock_ollama_client):
         """Test streaming when no relevant sources found."""
         from retriever import DocumentRetriever
         import faiss
@@ -261,62 +258,60 @@ class TestSourceMetadataExtraction:
         assert isinstance(sources_msg["data"], list)
 
 
-class TestAnthropicIntegration:
-    """Test integration with Anthropic Claude API."""
+class TestOllamaIntegration:
+    """Test integration with Ollama API."""
 
     @pytest.mark.asyncio
-    async def test_uses_correct_model(self, retriever_with_index, mocker):
-        """Test that correct Claude model is used."""
-        mock_stream = mocker.patch.object(
-            retriever_with_index.anthropic_client.messages,
-            'stream'
-        )
+    async def test_uses_correct_model(self, retriever_with_index):
+        """Test that correct Ollama model is used."""
+        from unittest.mock import Mock, AsyncMock
+        captured_kwargs = {}
 
-        class MockStream:
-            def __enter__(self):
-                return self
+        class MockChunk:
+            def __init__(self, content, done=False, done_reason=None):
+                self.message = Mock()
+                self.message.content = content
+                self.done = done
+                self.done_reason = done_reason
 
-            def __exit__(self, *args):
-                pass
+        async def _stream():
+            yield MockChunk("", done=True, done_reason="stop")
 
-            @property
-            def text_stream(self):
-                return iter([])
+        def chat_impl(**kwargs):
+            captured_kwargs.update(kwargs)
+            return _stream()
 
-        mock_stream.return_value = MockStream()
+        retriever_with_index.ollama_client.chat = AsyncMock(side_effect=chat_impl)
 
-        async for _ in retriever_with_index.ask_streaming("test"):
-            pass
+        [chunk async for chunk in retriever_with_index.ask_streaming("test")]
 
-        call_args = mock_stream.call_args
-        assert call_args[1]["model"] == "claude-sonnet-4-20250514"
+        assert captured_kwargs["model"] == "llama3.1:8b"
 
     @pytest.mark.asyncio
-    async def test_uses_correct_max_tokens(self, retriever_with_index, mocker):
-        """Test that max_tokens is set correctly."""
-        mock_stream = mocker.patch.object(
-            retriever_with_index.anthropic_client.messages,
-            'stream'
-        )
+    async def test_uses_correct_num_predict(self, retriever_with_index):
+        """Test that num_predict is set correctly from MAX_TOKENS env var."""
+        from unittest.mock import Mock, AsyncMock
+        captured_kwargs = {}
 
-        class MockStream:
-            def __enter__(self):
-                return self
+        class MockChunk:
+            def __init__(self, content, done=False, done_reason=None):
+                self.message = Mock()
+                self.message.content = content
+                self.done = done
+                self.done_reason = done_reason
 
-            def __exit__(self, *args):
-                pass
+        async def _stream():
+            yield MockChunk("", done=True, done_reason="stop")
 
-            @property
-            def text_stream(self):
-                return iter([])
+        def chat_impl(**kwargs):
+            captured_kwargs.update(kwargs)
+            return _stream()
 
-        mock_stream.return_value = MockStream()
+        retriever_with_index.ollama_client.chat = AsyncMock(side_effect=chat_impl)
 
-        async for _ in retriever_with_index.ask_streaming("test"):
-            pass
+        [chunk async for chunk in retriever_with_index.ask_streaming("test")]
 
-        call_args = mock_stream.call_args
-        assert call_args[1]["max_tokens"] == 16384
+        assert captured_kwargs["options"]["num_predict"] == 4096
 
 
 class TestJSONSerialization:

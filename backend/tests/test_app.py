@@ -8,13 +8,12 @@ from fastapi.websockets import WebSocketDisconnect
 
 
 @pytest.fixture
-def client(mock_anthropic_client, mock_env_vars):
+def client(mock_ollama_client, mock_env_vars):
     """Create a test client with mocked dependencies."""
     from app import app
-    # TestClient from starlette takes app as first positional argument
-    client = TestClient(app)
-    yield client
-    client.close()
+    # Use context manager so startup/shutdown lifespan handlers run
+    with TestClient(app) as client:
+        yield client
 
 
 class TestRESTEndpoints:
@@ -22,7 +21,7 @@ class TestRESTEndpoints:
 
     def test_index_documents_success(self, client, sample_docs, mocker):
         """Test successful document indexing via POST /api/index."""
-        mock_index_dir = mocker.patch('app.indexer.index_directory')
+        mock_index_dir = mocker.patch.object(client.app.state.indexer, 'index_directory')
         mock_index_dir.return_value = {
             "files": 5,
             "chunks": 42,
@@ -59,7 +58,7 @@ class TestRESTEndpoints:
 
     def test_get_stats_with_index(self, client, mocker):
         """Test GET /api/stats with indexed documents."""
-        mock_get_stats = mocker.patch('app.indexer.get_stats')
+        mock_get_stats = mocker.patch.object(client.app.state.indexer, 'get_stats')
         mock_get_stats.return_value = {
             "total_chunks": 387,
             "dimension": 384
@@ -74,7 +73,7 @@ class TestRESTEndpoints:
 
     def test_get_stats_without_index(self, client, mocker):
         """Test GET /api/stats with no indexed documents."""
-        mock_get_stats = mocker.patch('app.indexer.get_stats')
+        mock_get_stats = mocker.patch.object(client.app.state.indexer, 'get_stats')
         mock_get_stats.return_value = {
             "total_chunks": 0,
             "dimension": 384
@@ -94,7 +93,7 @@ class TestWebSocketIndexing:
         """Test successful WebSocket indexing."""
         messages_received = []
 
-        mock_index_dir = mocker.patch('app.indexer.index_directory')
+        mock_index_dir = mocker.patch.object(client.app.state.indexer, 'index_directory')
         mock_index_dir.return_value = {
             "files": 3,
             "chunks": 25,
@@ -142,7 +141,7 @@ class TestWebSocketIndexing:
 
     def test_websocket_index_indexing_error(self, client, mocker):
         """Test WebSocket indexing when indexer raises an error."""
-        mock_index_dir = mocker.patch('app.indexer.index_directory')
+        mock_index_dir = mocker.patch.object(client.app.state.indexer, 'index_directory')
         mock_index_dir.side_effect = Exception("Indexing failed")
 
         with client.websocket_connect("/ws/index") as websocket:
@@ -161,7 +160,7 @@ class TestWebSocketChat:
         """Test sending a chat message via WebSocket."""
         messages_received = []
 
-        mock_ask_streaming = mocker.patch('app.retriever.ask_streaming')
+        mock_ask_streaming = mocker.patch.object(client.app.state.retriever, 'ask_streaming')
 
         # Mock async generator
         async def mock_stream():
@@ -191,7 +190,7 @@ class TestWebSocketChat:
 
     def test_websocket_chat_maintains_history(self, client, mocker):
         """Test that conversation history is maintained."""
-        mock_ask_streaming = mocker.patch('app.retriever.ask_streaming')
+        mock_ask_streaming = mocker.patch.object(client.app.state.retriever, 'ask_streaming')
 
         async def mock_stream():
             yield json.dumps({"type": "content", "data": "Response"}) + "\n"
@@ -235,7 +234,7 @@ class TestWebSocketChat:
 
     def test_websocket_chat_empty_query(self, client, mocker):
         """Test WebSocket chat with empty query."""
-        mock_ask_streaming = mocker.patch('app.retriever.ask_streaming')
+        mock_ask_streaming = mocker.patch.object(client.app.state.retriever, 'ask_streaming')
 
         async def mock_stream():
             yield json.dumps({"type": "content", "data": "Response"}) + "\n"
