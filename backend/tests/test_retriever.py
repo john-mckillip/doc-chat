@@ -425,7 +425,7 @@ class TestOllamaIntegration:
 
         [chunk async for chunk in retriever_with_index.ask_streaming("test")]
 
-        assert captured_kwargs["options"]["num_predict"] == 4096
+        assert captured_kwargs["options"]["num_predict"] == retriever_with_index.settings.max_tokens
 
 
 class TestJSONSerialization:
