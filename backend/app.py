@@ -133,6 +133,50 @@ async def _handle_chat_message(
     )
 
 
+async def _parse_index_request(websocket: WebSocket, data: str) -> str | None:
+    try:
+        request_data = json.loads(data)
+    except json.JSONDecodeError:
+        await _send_error_message(websocket, "Invalid JSON in request")
+        await websocket.close()
+        return None
+
+    if not isinstance(request_data, dict):
+        await _send_error_message(websocket, "Invalid request format")
+        await websocket.close()
+        return None
+
+    directory = request_data.get("directory")
+    if not directory:
+        await _send_error_message(websocket, "No directory provided")
+        await websocket.close()
+        return None
+
+    return directory
+
+
+async def _run_indexing_with_progress(
+    websocket: WebSocket,
+    indexer: DocumentIndexer,
+    directory: str,
+):
+    loop = asyncio.get_event_loop()
+
+    async def send_progress(message):
+        await websocket.send_text(json.dumps(message))
+
+    def run_indexing():
+        def progress_callback(msg):
+            asyncio.run_coroutine_threadsafe(send_progress(msg), loop)
+
+        return indexer.index_directory(
+            directory,
+            progress_callback=progress_callback,
+        )
+
+    return await asyncio.to_thread(run_indexing)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.settings = settings
@@ -235,49 +279,12 @@ async def websocket_index(websocket: WebSocket):
         return
 
     try:
-        # Receive indexing request
         data = await websocket.receive_text()
-        try:
-            request_data = json.loads(data)
-        except json.JSONDecodeError:
-            await websocket.send_text(
-                json.dumps(
-                    {"type": "error", "data": {"message": "Invalid JSON in request"}}
-                )
-            )
-            await websocket.close()
-            return
-        directory = request_data.get("directory")
-
-        if not directory:
-            await websocket.send_text(
-                json.dumps(
-                    {"type": "error", "data": {"message": "No directory provided"}}
-                )
-            )
-            await websocket.close()
+        directory = await _parse_index_request(websocket, data)
+        if directory is None:
             return
 
-        # Get the current event loop to pass to the thread
-        loop = asyncio.get_event_loop()
-
-        # Define progress callback to send updates via WebSocket
-        async def send_progress(message):
-            await websocket.send_text(json.dumps(message))
-
-        # Run indexing in a thread to avoid blocking
-        def run_indexing():
-            def progress_callback(msg):
-                # Schedule the coroutine on the main event loop
-                asyncio.run_coroutine_threadsafe(send_progress(msg), loop)
-
-            return indexer.index_directory(
-                directory,
-                progress_callback=progress_callback,
-            )
-
-        # Run in executor to avoid blocking
-        stats = await asyncio.to_thread(run_indexing)
+        stats = await _run_indexing_with_progress(websocket, indexer, directory)
 
         # Reload the retriever so it picks up the new index
         retriever.reload()

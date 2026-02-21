@@ -76,11 +76,11 @@ export class MockWebSocket {
 // Global mock WebSocket
 export function setupWebSocketMock(): typeof MockWebSocket {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (global as any).WebSocket = MockWebSocket
+  (globalThis as any).WebSocket = MockWebSocket
   return MockWebSocket
 }
 
 export function resetWebSocketMock(): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  delete (global as any).WebSocket
+  delete (globalThis as any).WebSocket
 }

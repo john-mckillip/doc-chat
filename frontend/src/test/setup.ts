@@ -9,7 +9,7 @@ afterEach(() => {
 
 // Mock window.matchMedia
 beforeAll(() => {
-  Object.defineProperty(window, 'matchMedia', {
+  Object.defineProperty(globalThis, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation(query => ({
       matches: false,
@@ -27,7 +27,7 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
 
   // Mock console methods to reduce noise in tests
-  global.console = {
+  globalThis.console = {
     ...console,
     error: vi.fn(),
     warn: vi.fn(),

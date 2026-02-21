@@ -4,6 +4,7 @@ Shared pytest fixtures for testing the DocChat backend.
 This file sets up mocks for heavy dependencies (sentence-transformers, faiss, anthropic)
 BEFORE they are imported, to avoid slow initialization during tests.
 """
+
 import sys
 import pytest
 import numpy as np
@@ -19,18 +20,26 @@ RNG = np.random.default_rng(42)
 # Mock heavy dependencies BEFORE importing application code
 # ============================================================================
 
+
 # Mock sentence_transformers module
 class MockSentenceTransformer:
     """Mock SentenceTransformer class."""
+
     def __init__(self, *args, **kwargs):
         self._device = "cpu"
 
-    def encode(self, texts, show_progress_bar=False, convert_to_numpy=True,
-               batch_size=32, device=None):
+    def encode(
+        self,
+        texts,
+        show_progress_bar=False,
+        convert_to_numpy=True,
+        batch_size=32,
+        device=None,
+    ):
         """Return fixed embeddings (384 dimensions)."""
         if isinstance(texts, str):
             texts = [texts]
-        return RNG.random((len(texts), 384)).astype('float32')
+        return RNG.random((len(texts), 384)).astype("float32")
 
     def to(self, device):
         """Mock device placement."""
@@ -45,7 +54,7 @@ class MockSentenceTransformer:
         """Mock multiprocess encoding - returns same as regular encode."""
         if isinstance(texts, str):
             texts = [texts]
-        return RNG.random((len(texts), 384)).astype('float32')
+        return RNG.random((len(texts), 384)).astype("float32")
 
     def stop_multi_process_pool(self, pool):
         """Mock stopping pool - no-op."""
@@ -55,6 +64,7 @@ class MockSentenceTransformer:
 # Mock faiss module
 class MockFaissIndex:
     """Mock FAISS index."""
+
     def __init__(self):
         self.ntotal = 0
         self.d = 384
@@ -75,6 +85,7 @@ class MockFaissIndex:
 
 class MockFaiss:
     """Mock faiss module."""
+
     METRIC_L2 = 0
 
     @staticmethod
@@ -98,20 +109,21 @@ class MockFaiss:
 
 
 # Install mocks in sys.modules BEFORE any imports
-mock_st_module = type(sys)('sentence_transformers')
+mock_st_module = type(sys)("sentence_transformers")
 mock_st_module.SentenceTransformer = MockSentenceTransformer
-sys.modules['sentence_transformers'] = mock_st_module
+sys.modules["sentence_transformers"] = mock_st_module
 
-mock_faiss_module = type(sys)('faiss')
+mock_faiss_module = type(sys)("faiss")
 for attr in dir(MockFaiss):
-    if not attr.startswith('_'):
+    if not attr.startswith("_"):
         setattr(mock_faiss_module, attr, getattr(MockFaiss, attr))
-sys.modules['faiss'] = mock_faiss_module
+sys.modules["faiss"] = mock_faiss_module
 
 
 # ============================================================================
 # Pytest Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def temp_dir():
@@ -139,7 +151,7 @@ def sample_docs(temp_dir):
         if isinstance(content, bytes):
             filepath.write_bytes(content)
         else:
-            filepath.write_text(content, encoding='utf-8')
+            filepath.write_text(content, encoding="utf-8")
 
     return temp_dir
 
@@ -148,6 +160,7 @@ def sample_docs(temp_dir):
 def mock_ollama_client(mocker):
     """Mock Ollama async client for LLM interactions."""
     from unittest.mock import AsyncMock
+
     mock_client = Mock()
 
     class MockChunk:
@@ -164,7 +177,7 @@ def mock_ollama_client(mocker):
 
     mock_client.chat = AsyncMock(side_effect=lambda **kwargs: _default_stream())
 
-    mocker.patch('ollama.AsyncClient', return_value=mock_client)
+    mocker.patch("ollama.AsyncClient", return_value=mock_client)
 
     return mock_client
 
@@ -172,11 +185,14 @@ def mock_ollama_client(mocker):
 @pytest.fixture
 def mock_env_vars(mocker):
     """Mock environment variables."""
-    mocker.patch.dict('os.environ', {
-        'OLLAMA_HOST': 'http://localhost:11434',
-        'OLLAMA_MODEL': 'llama3.1:8b',
-        'FAISS_PERSIST_DIR': './test_data/faiss_db'
-    })
+    mocker.patch.dict(
+        "os.environ",
+        {
+            "OLLAMA_HOST": "http://localhost:11434",
+            "OLLAMA_MODEL": "llama3.1:8b",
+            "FAISS_PERSIST_DIR": "./test_data/faiss_db",
+        },
+    )
 
 
 @pytest.fixture
@@ -194,7 +210,7 @@ def indexer_with_data(temp_dir):
             "chunk_index": 0,
             "hash": "abc123",
             "extension": ".md",
-            "deleted": False
+            "deleted": False,
         },
         {
             "file_path": "/test/doc2.md",
@@ -202,14 +218,11 @@ def indexer_with_data(temp_dir):
             "chunk_index": 0,
             "hash": "def456",
             "extension": ".md",
-            "deleted": True  # Deleted chunk
-        }
+            "deleted": True,  # Deleted chunk
+        },
     ]
     indexer.texts = ["First document text", "Second document text (deleted)"]
-    indexer.file_hashes = {
-        "/test/doc1.md": "abc123",
-        "/test/doc2.md": "def456"
-    }
+    indexer.file_hashes = {"/test/doc1.md": "abc123", "/test/doc2.md": "def456"}
     indexer.index.ntotal = 2
 
     return indexer
@@ -231,27 +244,27 @@ def retriever_with_index(temp_dir, mock_ollama_client):
             "file_path": "/test/auth.md",
             "file_name": "auth.md",
             "chunk_index": 0,
-            "deleted": False
+            "deleted": False,
         },
         {
             "file_path": "/test/api.md",
             "file_name": "api.md",
             "chunk_index": 0,
-            "deleted": False
-        }
+            "deleted": False,
+        },
     ]
     texts = [
         "Authentication uses JWT tokens for secure access.",
-        "API endpoints are available at /api/v1/"
+        "API endpoints are available at /api/v1/",
     ]
 
     # Since faiss is mocked, manually create dummy index file
     (faiss_dir / "index.faiss").touch()
 
-    with open(faiss_dir / "metadata.pkl", 'wb') as f:
+    with open(faiss_dir / "metadata.pkl", "wb") as f:
         pickle.dump(metadata, f)
 
-    with open(faiss_dir / "texts.pkl", 'wb') as f:
+    with open(faiss_dir / "texts.pkl", "wb") as f:
         pickle.dump(texts, f)
 
     # Now create retriever - it will load the files we just created

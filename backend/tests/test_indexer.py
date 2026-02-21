@@ -1,6 +1,7 @@
 """
 Tests for DocumentIndexer class and indexing functionality.
 """
+
 import pytest
 from pathlib import Path
 import hashlib
@@ -29,11 +30,11 @@ class TestDocumentIndexerInit:
 
         # Create dummy index files
         (persist_dir / "index.faiss").touch()
-        with open(persist_dir / "metadata.pkl", 'wb') as f:
+        with open(persist_dir / "metadata.pkl", "wb") as f:
             pickle.dump([{"test": "metadata"}], f)
-        with open(persist_dir / "texts.pkl", 'wb') as f:
+        with open(persist_dir / "texts.pkl", "wb") as f:
             pickle.dump(["test text"], f)
-        with open(persist_dir / "file_hashes.pkl", 'wb') as f:
+        with open(persist_dir / "file_hashes.pkl", "wb") as f:
             pickle.dump({"/test.md": "abc123"}, f)
 
         indexer = DocumentIndexer(persist_directory=str(persist_dir))
@@ -99,24 +100,27 @@ class TestFileHashing:
 class TestFileFiltering:
     """Test file type filtering."""
 
-    @pytest.mark.parametrize("filename,should_index", [
-        ("test.md", True),
-        ("test.txt", True),
-        ("test.py", True),
-        ("test.js", True),
-        ("test.ts", True),
-        ("test.tsx", True),
-        ("test.cs", True),
-        ("test.json", True),
-        ("test.yaml", True),
-        ("test.yml", True),
-        ("test.MD", True),  # Case insensitive
-        ("test.pdf", False),
-        ("test.docx", False),
-        ("test.exe", False),
-        ("test.png", False),
-        ("test", False),  # No extension
-    ])
+    @pytest.mark.parametrize(
+        "filename,should_index",
+        [
+            ("test.md", True),
+            ("test.txt", True),
+            ("test.py", True),
+            ("test.js", True),
+            ("test.ts", True),
+            ("test.tsx", True),
+            ("test.cs", True),
+            ("test.json", True),
+            ("test.yaml", True),
+            ("test.yml", True),
+            ("test.MD", True),  # Case insensitive
+            ("test.pdf", False),
+            ("test.docx", False),
+            ("test.exe", False),
+            ("test.png", False),
+            ("test", False),  # No extension
+        ],
+    )
     def test_should_index_file(self, temp_dir, filename, should_index):
         """Test file type filtering for various extensions."""
         from indexer import DocumentIndexer
@@ -145,7 +149,10 @@ class TestFileFiltering:
         indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
 
         # These should be excluded due to directory
-        assert indexer._should_index_file(Path("/project/node_modules/package/index.js")) is False
+        assert (
+            indexer._should_index_file(Path("/project/node_modules/package/index.js"))
+            is False
+        )
         assert indexer._should_index_file(Path("/project/bin/Debug/app.dll")) is False
         assert indexer._should_index_file(Path("/project/.git/config")) is False
         assert indexer._should_index_file(Path("/project/venv/lib/site.py")) is False
@@ -192,7 +199,10 @@ class TestChunkDeletion:
         indexer.metadata = [
             {"file_path": "/test/doc1.md", "deleted": False},
             {"file_path": "/test/doc2.md", "deleted": False},
-            {"file_path": "/test/doc1.md", "deleted": False},  # Multiple chunks from same file
+            {
+                "file_path": "/test/doc1.md",
+                "deleted": False,
+            },  # Multiple chunks from same file
         ]
 
         indexer._mark_file_chunks_deleted(Path("/test/doc1.md"))
@@ -225,7 +235,7 @@ class TestIndexPersistence:
         import faiss
 
         # Mock write_index since we want to verify it's called
-        mock_write = mocker.patch.object(faiss, 'write_index')
+        mock_write = mocker.patch.object(faiss, "write_index")
 
         persist_dir = temp_dir / "db"
         indexer = DocumentIndexer(persist_directory=str(persist_dir))
@@ -271,7 +281,9 @@ class TestDirectoryIndexing:
         def progress_callback(msg):
             messages.append(msg)
 
-        stats = indexer.index_directory(str(sample_docs), progress_callback=progress_callback)
+        stats = indexer.index_directory(
+            str(sample_docs), progress_callback=progress_callback
+        )
 
         # Should receive various progress messages
         assert stats["files"] > 0
@@ -306,7 +318,9 @@ class TestDirectoryIndexing:
         indexer.index_directory(str(sample_docs))
 
         # Modify a file
-        (sample_docs / "readme.md").write_text("# Modified Content\n\nThis has changed.")
+        (sample_docs / "readme.md").write_text(
+            "# Modified Content\n\nThis has changed."
+        )
 
         # Re-index
         stats = indexer.index_directory(str(sample_docs))
@@ -364,7 +378,9 @@ class TestDirectoryIndexing:
         def progress_callback(msg):
             messages.append(msg)
 
-        stats = indexer.index_directory(str(docs_dir), progress_callback=progress_callback)
+        stats = indexer.index_directory(
+            str(docs_dir), progress_callback=progress_callback
+        )
 
         # Should have at least one error message
         error_messages = [msg for msg in messages if msg["type"] == "error"]
@@ -373,7 +389,7 @@ class TestDirectoryIndexing:
         # Assert stats - the good file should be indexed, bad file should error
         assert stats["files"] == 1  # Only good.md should be successfully indexed
         assert stats["chunks"] > 0  # Should have some chunks from good.md
-        assert stats["new"] == 1    # Good file is new
+        assert stats["new"] == 1  # Good file is new
 
 
 class TestGetStats:
@@ -422,28 +438,28 @@ class TestGetIndexedFiles:
                 "file_name": "doc1.md",
                 "extension": ".md",
                 "hash": "abc123",
-                "deleted": False
+                "deleted": False,
             },
             {
                 "file_path": "/test/doc1.md",
                 "file_name": "doc1.md",
                 "extension": ".md",
                 "hash": "abc123",
-                "deleted": False
+                "deleted": False,
             },
             {
                 "file_path": "/test/doc2.py",
                 "file_name": "doc2.py",
                 "extension": ".py",
                 "hash": "def456",
-                "deleted": False
+                "deleted": False,
             },
             {
                 "file_path": "/test/doc3.md",
                 "file_name": "doc3.md",
                 "extension": ".md",
                 "hash": "ghi789",
-                "deleted": True  # Should be excluded
+                "deleted": True,  # Should be excluded
             },
         ]
 
@@ -488,8 +504,10 @@ class TestDeviceDetection:
         import torch
 
         # Mock CUDA availability
-        mocker.patch.object(torch.cuda, 'is_available', return_value=True)
-        mocker.patch.object(torch.cuda, 'get_device_name', return_value='NVIDIA Test GPU')
+        mocker.patch.object(torch.cuda, "is_available", return_value=True)
+        mocker.patch.object(
+            torch.cuda, "get_device_name", return_value="NVIDIA Test GPU"
+        )
 
         indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
 
@@ -502,7 +520,7 @@ class TestDeviceDetection:
         import torch
 
         # Mock CUDA unavailable
-        mocker.patch.object(torch.cuda, 'is_available', return_value=False)
+        mocker.patch.object(torch.cuda, "is_available", return_value=False)
 
         indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
 
@@ -513,7 +531,9 @@ class TestDeviceDetection:
 class TestMultiprocessEncoding:
     """Test multiprocessing encoding functionality."""
 
-    def test_encode_in_batches_uses_multiprocess_when_threshold_met(self, temp_dir, mocker):
+    def test_encode_in_batches_uses_multiprocess_when_threshold_met(
+        self, temp_dir, mocker
+    ):
         """Test that multiprocessing is used when chunk count exceeds threshold."""
         from indexer import DocumentIndexer
         from config import get_backend_settings
@@ -522,7 +542,9 @@ class TestMultiprocessEncoding:
         # Build settings with a low threshold so 10 texts exceed it.
         # MIN_CHUNKS_FOR_MULTIPROCESS was refactored into BackendSettings;
         # patch via dataclasses.replace since BackendSettings is frozen=True.
-        low_threshold_settings = replace(get_backend_settings(), min_chunks_for_multiprocess=5)
+        low_threshold_settings = replace(
+            get_backend_settings(), min_chunks_for_multiprocess=5
+        )
 
         indexer = DocumentIndexer(
             persist_directory=str(temp_dir / "db"),
@@ -532,9 +554,7 @@ class TestMultiprocessEncoding:
 
         # Mock _encode_multiprocess to verify it's called
         mock_multiprocess = mocker.patch.object(
-            indexer,
-            '_encode_multiprocess',
-            return_value=mocker.MagicMock()
+            indexer, "_encode_multiprocess", return_value=mocker.MagicMock()
         )
 
         texts = ["text"] * 10  # Above threshold
@@ -552,22 +572,15 @@ class TestMultiprocessEncoding:
 
         # Mock the multiprocess pool methods
         mock_pool = mocker.MagicMock()
-        mock_embeddings = np.random.rand(3, 384).astype('float32')
+        mock_embeddings = np.random.rand(3, 384).astype("float32")
 
         mocker.patch.object(
-            indexer.model,
-            'start_multi_process_pool',
-            return_value=mock_pool
+            indexer.model, "start_multi_process_pool", return_value=mock_pool
         )
         mocker.patch.object(
-            indexer.model,
-            'encode_multi_process',
-            return_value=mock_embeddings
+            indexer.model, "encode_multi_process", return_value=mock_embeddings
         )
-        mocker.patch.object(
-            indexer.model,
-            'stop_multi_process_pool'
-        )
+        mocker.patch.object(indexer.model, "stop_multi_process_pool")
 
         texts = ["text1", "text2", "text3"]
         messages = []
@@ -595,19 +608,14 @@ class TestMultiprocessEncoding:
 
         mock_pool = mocker.MagicMock()
         mocker.patch.object(
-            indexer.model,
-            'start_multi_process_pool',
-            return_value=mock_pool
+            indexer.model, "start_multi_process_pool", return_value=mock_pool
         )
         mocker.patch.object(
             indexer.model,
-            'encode_multi_process',
-            side_effect=RuntimeError("Test error")
+            "encode_multi_process",
+            side_effect=RuntimeError("Test error"),
         )
-        mock_stop = mocker.patch.object(
-            indexer.model,
-            'stop_multi_process_pool'
-        )
+        mock_stop = mocker.patch.object(indexer.model, "stop_multi_process_pool")
 
         texts = ["text1", "text2"]
 
@@ -628,7 +636,7 @@ class TestFinalizeIndexing:
         indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
 
         # Mock _save to verify it's called
-        mock_save = mocker.patch.object(indexer, '_save')
+        mock_save = mocker.patch.object(indexer, "_save")
 
         stats = {
             "files": 0,
@@ -636,7 +644,7 @@ class TestFinalizeIndexing:
             "new": 0,
             "modified": 0,
             "unchanged": 0,
-            "deleted": 2  # Has deletions
+            "deleted": 2,  # Has deletions
         }
 
         messages = []
@@ -660,7 +668,7 @@ class TestFinalizeIndexing:
 
         indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
 
-        mock_save = mocker.patch.object(indexer, '_save')
+        mock_save = mocker.patch.object(indexer, "_save")
 
         stats = {
             "files": 0,
@@ -668,7 +676,7 @@ class TestFinalizeIndexing:
             "new": 0,
             "modified": 0,
             "unchanged": 5,
-            "deleted": 0
+            "deleted": 0,
         }
 
         indexer._finalize_indexing([], stats)
@@ -704,14 +712,9 @@ class TestHelperMethods:
 
         # Set up existing hash
         indexer.file_hashes[str(test_file)] = "old_hash"
-        indexer.metadata = [
-            {"file_path": str(test_file), "deleted": False}
-        ]
+        indexer.metadata = [{"file_path": str(test_file), "deleted": False}]
 
-        status, should_skip = indexer._get_file_status(
-            test_file,
-            "new_hash"
-        )
+        status, should_skip = indexer._get_file_status(test_file, "new_hash")
 
         assert status == "modified"
         assert should_skip is False
@@ -745,12 +748,7 @@ class TestHelperMethods:
         content = "# Test\n\nThis is test content."
         file_hash = "test_hash"
 
-        documents = indexer._process_single_file(
-            test_file,
-            content,
-            file_hash,
-            "new"
-        )
+        documents = indexer._process_single_file(test_file, content, file_hash, "new")
 
         assert len(documents) > 0
         assert all("text" in doc for doc in documents)
@@ -774,13 +772,7 @@ class TestHelperMethods:
         def callback(msg):
             messages.append(msg)
 
-        indexer._process_single_file(
-            test_file,
-            content,
-            file_hash,
-            "new",
-            callback
-        )
+        indexer._process_single_file(test_file, content, file_hash, "new", callback)
 
         message_types = [msg["type"] for msg in messages]
         assert "file_processing" in message_types
@@ -823,9 +815,7 @@ class TestHelperMethods:
 
         indexer = DocumentIndexer(persist_directory=str(temp_dir / "db"))
         indexer.file_hashes = {"/test/deleted.md": "hash"}
-        indexer.metadata = [
-            {"file_path": "/test/deleted.md", "deleted": False}
-        ]
+        indexer.metadata = [{"file_path": "/test/deleted.md", "deleted": False}]
 
         messages = []
 
@@ -846,12 +836,12 @@ class TestHelperMethods:
         documents = [
             {
                 "text": "Test chunk 1",
-                "metadata": {"file_path": "/test.md", "chunk_index": 0}
+                "metadata": {"file_path": "/test.md", "chunk_index": 0},
             },
             {
                 "text": "Test chunk 2",
-                "metadata": {"file_path": "/test.md", "chunk_index": 1}
-            }
+                "metadata": {"file_path": "/test.md", "chunk_index": 1},
+            },
         ]
 
         initial_count = indexer.index.ntotal
@@ -883,7 +873,7 @@ class TestHelperMethods:
         documents = [
             {
                 "text": "Test chunk",
-                "metadata": {"file_path": "/test.md", "chunk_index": 0}
+                "metadata": {"file_path": "/test.md", "chunk_index": 0},
             }
         ]
 

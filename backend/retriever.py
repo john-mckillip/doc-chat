@@ -38,9 +38,7 @@ class DocumentRetriever:
         self.model = SentenceTransformer(self.settings.sentence_transformer_model)
 
         # Initialize Ollama client
-        self.ollama_client = AsyncClient(
-            host=self.settings.ollama_host
-        )
+        self.ollama_client = AsyncClient(host=self.settings.ollama_host)
 
     def _load_index(self):
         """Load the FAISS index and associated data from disk."""
@@ -66,10 +64,10 @@ class DocumentRetriever:
             print("Loading FAISS index...")
             self.index = faiss.read_index(str(self.index_file))
 
-            with open(self.metadata_file, 'rb') as f:
+            with open(self.metadata_file, "rb") as f:
                 self.metadata = pickle.load(f)
 
-            with open(self.texts_file, 'rb') as f:
+            with open(self.texts_file, "rb") as f:
                 self.texts = pickle.load(f)
 
             print(f"✓ Loaded {len(self.texts)} document chunks")
@@ -94,11 +92,13 @@ class DocumentRetriever:
 
         # Generate query embedding
         query_embedding = self.model.encode([query])
-        query_vector = np.array(query_embedding).astype('float32')
+        query_vector = np.array(query_embedding).astype("float32")
 
         # Search FAISS index - get more results to account for deleted chunks
         search_k = top_k * self.settings.retrieval_search_multiplier
-        distances, indices = self.index.search(query_vector, min(search_k, self.index.ntotal))
+        distances, indices = self.index.search(
+            query_vector, min(search_k, self.index.ntotal)
+        )
 
         # Build results, filtering out deleted chunks
         sources = []
@@ -106,14 +106,16 @@ class DocumentRetriever:
             if idx < len(self.metadata):  # Valid index
                 metadata = self.metadata[idx]
                 # Skip deleted chunks
-                if metadata.get('deleted', False):
+                if metadata.get("deleted", False):
                     continue
 
-                sources.append({
-                    "text": self.texts[idx],
-                    "metadata": metadata,
-                    "score": float(distances[0][i])
-                })
+                sources.append(
+                    {
+                        "text": self.texts[idx],
+                        "metadata": metadata,
+                        "score": float(distances[0][i]),
+                    }
+                )
 
                 # Stop once we have enough non-deleted results
                 if len(sources) >= top_k:
@@ -122,10 +124,12 @@ class DocumentRetriever:
         return sources
 
     def _build_context(self, sources: List[Dict]) -> str:
-        return "\n\n".join([
-            f"Source: {source['metadata']['file_name']}\n{source['text']}"
-            for source in sources
-        ])
+        return "\n\n".join(
+            [
+                f"Source: {source['metadata']['file_name']}\n{source['text']}"
+                for source in sources
+            ]
+        )
 
     def _build_messages(
         self,
@@ -142,22 +146,25 @@ class DocumentRetriever:
         return messages
 
     def _serialize_sources(self, sources: List[Dict]) -> str:
-        return json.dumps({
-            "type": "sources",
-            "data": [
+        return (
+            json.dumps(
                 {
-                    "file": source['metadata']['file_name'],
-                    "path": source['metadata']['file_path'],
-                    "chunk": source['metadata']['chunk_index']
+                    "type": "sources",
+                    "data": [
+                        {
+                            "file": source["metadata"]["file_name"],
+                            "path": source["metadata"]["file_path"],
+                            "chunk": source["metadata"]["chunk_index"],
+                        }
+                        for source in sources
+                    ],
                 }
-                for source in sources
-            ]
-        }) + "\n"
+            )
+            + "\n"
+        )
 
     async def ask_streaming(
-        self,
-        query: str,
-        conversation_history: Optional[List[Dict]] = None
+        self, query: str, conversation_history: Optional[List[Dict]] = None
     ) -> AsyncGenerator[str, None]:
         """Ask question with streaming response"""
 
@@ -180,16 +187,23 @@ class DocumentRetriever:
                 model=self.settings.ollama_model,
                 messages=messages,
                 stream=True,
-                options={"num_predict": num_predict}
+                options={"num_predict": num_predict},
             )
             async for chunk in stream:
                 text = chunk.message.content
                 if text:
                     yield json.dumps({"type": "content", "data": text}) + "\n"
                 if chunk.done and chunk.done_reason == "length":
-                    yield json.dumps({
-                        "type": "truncated",
-                        "data": {"reason": "max_tokens", "output_tokens": num_predict}
-                    }) + "\n"
+                    yield json.dumps(
+                        {
+                            "type": "truncated",
+                            "data": {
+                                "reason": "max_tokens",
+                                "output_tokens": num_predict,
+                            },
+                        }
+                    ) + "\n"
         except Exception as exc:
-            yield json.dumps({"type": "error", "data": {"message": f"LLM error: {exc}"}}) + "\n"
+            yield json.dumps(
+                {"type": "error", "data": {"message": f"LLM error: {exc}"}}
+            ) + "\n"

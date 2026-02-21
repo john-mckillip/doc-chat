@@ -1,6 +1,23 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { IndexProgress, IndexStats } from '../types';
 
+const isIndexStats = (value: unknown): value is IndexStats => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const stats = value as Record<string, unknown>;
+
+  return (
+    typeof stats.files === 'number' &&
+    typeof stats.chunks === 'number' &&
+    typeof stats.new === 'number' &&
+    typeof stats.modified === 'number' &&
+    typeof stats.unchanged === 'number' &&
+    typeof stats.deleted === 'number'
+  );
+};
+
 export const useIndexWebSocket = (url: string) => {
   const [isIndexing, setIsIndexing] = useState(false);
   const [progress, setProgress] = useState<IndexProgress>({
@@ -121,7 +138,7 @@ export const useIndexWebSocket = (url: string) => {
             break;
 
           case 'stats':
-            setStats(messageData as IndexStats);
+            setStats(isIndexStats(messageData) ? messageData : null);
             setProgress(prev => ({
               ...prev,
               phase: 'complete',

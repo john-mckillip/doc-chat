@@ -5,7 +5,6 @@ Tests for FastAPI application endpoints and WebSocket handlers.
 import pytest
 import json
 from fastapi.testclient import TestClient
-from fastapi.websockets import WebSocketDisconnect
 
 
 @pytest.fixture
