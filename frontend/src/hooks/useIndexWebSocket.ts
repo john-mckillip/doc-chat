@@ -32,7 +32,24 @@ export const useIndexWebSocket = (url: string) => {
 
     ws.onmessage = (event) => {
       try {
-        const message = JSON.parse(event.data);
+        const message = JSON.parse(event.data) as { type?: unknown; data?: unknown };
+
+        if (!message || typeof message !== 'object' || typeof message.type !== 'string') {
+          setError('Invalid message format from indexing service');
+          setIsIndexing(false);
+          ws.close();
+          return;
+        }
+
+        const messageData =
+          message.data && typeof message.data === 'object' ? message.data as Record<string, unknown> : {};
+
+        const dataMessage = typeof messageData.message === 'string' ? messageData.message : 'Unknown error';
+        const dataFile = typeof messageData.file === 'string' ? messageData.file : 'unknown';
+        const dataStatus = typeof messageData.status === 'string' ? messageData.status : 'unknown';
+        const dataDirectory = typeof messageData.directory === 'string' ? messageData.directory : 'unknown';
+        const dataChunks = typeof messageData.chunks === 'number' ? messageData.chunks : 0;
+        const dataTotalChunks = typeof messageData.total_chunks === 'number' ? messageData.total_chunks : 0;
 
         switch (message.type) {
           case 'scan_start':
@@ -40,7 +57,7 @@ export const useIndexWebSocket = (url: string) => {
               phase: 'scanning',
               currentFile: '',
               totalChunks: 0,
-              message: `Scanning directory: ${message.data.directory}`
+              message: `Scanning directory: ${dataDirectory}`
             });
             break;
 
@@ -48,15 +65,15 @@ export const useIndexWebSocket = (url: string) => {
             setProgress(prev => ({
               ...prev,
               phase: 'processing',
-              currentFile: message.data.file,
-              message: `Processing: ${message.data.file} (${message.data.status})`
+              currentFile: dataFile,
+              message: `Processing: ${dataFile} (${dataStatus})`
             }));
             break;
 
           case 'file_processed':
             setProgress(prev => ({
               ...prev,
-              message: `Processed: ${message.data.file} (${message.data.chunks} chunks)`
+              message: `Processed: ${dataFile} (${dataChunks} chunks)`
             }));
             break;
 
@@ -67,7 +84,7 @@ export const useIndexWebSocket = (url: string) => {
           case 'file_deleted':
             setProgress(prev => ({
               ...prev,
-              message: `Removed: ${message.data.file}`
+              message: `Removed: ${dataFile}`
             }));
             break;
 
@@ -75,8 +92,8 @@ export const useIndexWebSocket = (url: string) => {
             setProgress({
               phase: 'embeddings',
               currentFile: '',
-              totalChunks: message.data.total_chunks,
-              message: `Generating embeddings for ${message.data.total_chunks} chunks...`
+              totalChunks: dataTotalChunks,
+              message: `Generating embeddings for ${dataTotalChunks} chunks...`
             });
             break;
 
@@ -104,11 +121,11 @@ export const useIndexWebSocket = (url: string) => {
             break;
 
           case 'stats':
-            setStats(message.data);
+            setStats(messageData as IndexStats);
             setProgress(prev => ({
               ...prev,
               phase: 'complete',
-              message: `Completed: ${message.data.files} files processed`
+              message: `Completed: ${typeof messageData.files === 'number' ? messageData.files : 0} files processed`
             }));
             break;
 
@@ -118,21 +135,31 @@ export const useIndexWebSocket = (url: string) => {
             break;
 
           case 'error':
-            console.error('Indexing error:', message.data);
+            setError(dataMessage);
             setProgress(prev => ({
               ...prev,
-              message: `Error: ${message.data.message}`
+              message: `Error: ${dataMessage}`
             }));
             break;
 
           case 'fatal_error':
-            setError(message.data.message);
+            setError(dataMessage);
             setIsIndexing(false);
             ws.close();
+            break;
+
+          default:
+            setProgress(prev => ({
+              ...prev,
+              message: `Unknown message type: ${message.type}`
+            }));
             break;
         }
       } catch (err) {
         console.error('Failed to parse message:', err);
+        setError('Received malformed indexing message');
+        setIsIndexing(false);
+        ws.close();
       }
     };
 

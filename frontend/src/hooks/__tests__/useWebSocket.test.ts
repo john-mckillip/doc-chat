@@ -18,7 +18,7 @@ beforeEach(() => {
     }
   });
 
-  (global as unknown as { WebSocket: typeof MockWebSocket }).WebSocket = CapturingMockWS;
+  (globalThis as unknown as { WebSocket: typeof MockWebSocket }).WebSocket = CapturingMockWS;
 });
 
 afterEach(() => {

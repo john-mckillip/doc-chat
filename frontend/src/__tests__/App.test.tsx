@@ -10,7 +10,7 @@ vi.mock('../components/Chat', () => ({
 vi.mock('../components/IndexStatus', () => ({
   IndexStatus: ({ onIndexComplete }: { onIndexComplete: () => void }) => (
     <div data-testid="index-status">
-      IndexStatus Component
+      IndexStatus Component{' '}
       <button onClick={onIndexComplete}>Complete</button>
     </div>
   )
@@ -19,11 +19,11 @@ vi.mock('../components/IndexStatus', () => ({
 describe('App', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    global.fetch = vi.fn()
+    globalThis.fetch = vi.fn()
   })
 
   it('renders without crashing', () => {
-    vi.mocked(global.fetch).mockResolvedValueOnce({
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ total_chunks: 0 })
     } as Response)
@@ -33,7 +33,7 @@ describe('App', () => {
   })
 
   it('fetches stats on mount', async () => {
-    vi.mocked(global.fetch).mockResolvedValueOnce({
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ total_chunks: 100 })
     } as Response)
@@ -41,12 +41,12 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/api/stats', expect.any(Object))
+      expect(globalThis.fetch).toHaveBeenCalledWith('http://localhost:8000/api/stats', expect.any(Object))
     })
   })
 
   it('shows IndexStatus when not indexed', async () => {
-    vi.mocked(global.fetch).mockResolvedValueOnce({
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ total_chunks: 0 })
     } as Response)
@@ -59,7 +59,7 @@ describe('App', () => {
   })
 
   it('shows Chat when indexed', async () => {
-    vi.mocked(global.fetch).mockResolvedValueOnce({
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({ total_chunks: 100 })
     } as Response)
@@ -73,7 +73,7 @@ describe('App', () => {
 
   it('handles fetch errors gracefully', async () => {
     const consoleError = vi.spyOn(console, 'error')
-    vi.mocked(global.fetch).mockRejectedValueOnce(new Error('Network error'))
+    vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error('Network error'))
 
     render(<App />)
 
@@ -83,7 +83,7 @@ describe('App', () => {
   })
 
   it('refetches stats when onIndexComplete is called', async () => {
-    vi.mocked(global.fetch)
+    vi.mocked(globalThis.fetch)
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ total_chunks: 0 })
@@ -105,7 +105,7 @@ describe('App', () => {
     completeButton.click()
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledTimes(2)
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2)
     })
   })
 })

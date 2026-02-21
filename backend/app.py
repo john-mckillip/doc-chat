@@ -40,6 +40,99 @@ async def _try_send_fatal_error(websocket: WebSocket, message: str) -> None:
         print(f"Failed to send error to client: {send_exc}")
 
 
+async def _send_error_message(websocket: WebSocket, message: str) -> None:
+    await websocket.send_text(
+        json.dumps(
+            {
+                "type": "error",
+                "data": {"message": message},
+            }
+        )
+    )
+
+
+async def _parse_chat_request(websocket: WebSocket, data: str) -> dict | None:
+    try:
+        message_data = json.loads(data)
+    except json.JSONDecodeError:
+        await _send_error_message(websocket, "Invalid JSON in request")
+        return None
+
+    if not isinstance(message_data, dict):
+        await _send_error_message(websocket, "Invalid request format")
+        return None
+
+    return message_data
+
+
+async def _parse_retriever_chunk(websocket: WebSocket, chunk: str) -> dict | None:
+    try:
+        chunk_data = json.loads(chunk)
+    except json.JSONDecodeError:
+        await _try_send_fatal_error(
+            websocket,
+            "Invalid JSON chunk received from retriever",
+        )
+        await websocket.close()
+        return None
+
+    if not isinstance(chunk_data, dict):
+        await _try_send_fatal_error(
+            websocket,
+            "Invalid chunk format received from retriever",
+        )
+        await websocket.close()
+        return None
+
+    return chunk_data
+
+
+async def _stream_chat_response(
+    websocket: WebSocket,
+    retriever: DocumentRetriever,
+    query: str,
+    conversation_history: list[dict],
+) -> bool:
+    assistant_message = ""
+    async for chunk in retriever.ask_streaming(query, conversation_history[:-1]):
+        chunk_data = await _parse_retriever_chunk(websocket, chunk)
+        if chunk_data is None:
+            return False
+
+        if chunk_data.get("type") == "content":
+            content = chunk_data.get("data")
+            if isinstance(content, str):
+                assistant_message += content
+
+        await websocket.send_text(chunk)
+
+    if assistant_message:
+        conversation_history.append({"role": "assistant", "content": assistant_message})
+
+    await websocket.send_text(json.dumps({"type": "done"}) + "\n")
+    return True
+
+
+async def _handle_chat_message(
+    websocket: WebSocket,
+    retriever: DocumentRetriever,
+    conversation_history: list[dict],
+    raw_data: str,
+) -> bool:
+    message_data = await _parse_chat_request(websocket, raw_data)
+    if message_data is None:
+        return True
+
+    query = message_data.get("query")
+    if not query:
+        return True
+
+    conversation_history.append({"role": "user", "content": query})
+    return await _stream_chat_response(
+        websocket, retriever, query, conversation_history
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.settings = settings
@@ -219,48 +312,12 @@ async def websocket_chat(websocket: WebSocket):
 
     try:
         while True:
-            # Receive message from client
             data = await websocket.receive_text()
-            try:
-                message_data = json.loads(data)
-            except json.JSONDecodeError:
-                await websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "data": {"message": "Invalid JSON in request"},
-                        }
-                    )
-                )
-                continue
-
-            query = message_data.get("query")
-            if not query:
-                continue
-
-            # Add user message to history
-            conversation_history.append({"role": "user", "content": query})
-
-            # Stream response
-            assistant_message = ""
-            async for chunk in retriever.ask_streaming(
-                query, conversation_history[:-1]
-            ):
-                await websocket.send_text(chunk)
-
-                # Collect assistant message for history
-                chunk_data = json.loads(chunk)
-                if chunk_data["type"] == "content":
-                    assistant_message += chunk_data["data"]
-
-            # Add complete assistant message to history
-            if assistant_message:
-                conversation_history.append(
-                    {"role": "assistant", "content": assistant_message}
-                )
-
-            # Send completion signal
-            await websocket.send_text(json.dumps({"type": "done"}) + "\n")
+            should_continue = await _handle_chat_message(
+                websocket, retriever, conversation_history, data
+            )
+            if not should_continue:
+                return
 
     except WebSocketDisconnect:
         print("Client disconnected")
